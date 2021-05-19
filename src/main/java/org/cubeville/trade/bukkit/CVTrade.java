@@ -428,7 +428,7 @@ public final class CVTrade extends JavaPlugin {
             return false;
         }
     
-        if (activeTrade.getTradeStatus().ordinal() < ActiveTrade.TradeStatus.DECIDE.ordinal()) {
+        if (activeTrade.getTradeStatus() != ActiveTrade.TradeStatus.DECIDE) {
             return false;
         }
         
@@ -1521,6 +1521,62 @@ public final class CVTrade extends JavaPlugin {
         
         this.tradeInventories.put(playerId, otherTradeInventory);
         this.tradeInventories.put(otherPlayerId, senderTradeInventory);
+    }
+    
+    public void viewTrade(@NotNull final Player player) {
+        
+        final UUID playerId = player.getUniqueId();
+        final ActiveTrade activeTrade = this.activeTrades.get(playerId);
+        if (activeTrade == null) {
+            player.sendMessage("§cYou are not currently in a trade.");
+            return;
+        }
+    
+        switch (activeTrade.getTradeStatus()) {
+            case PREPARE:
+                player.sendMessage("§cYou cannot view the other player's items; you have not decided what items you want to trade yet.");
+                return;
+            case READY:
+                player.sendMessage("§cYou cannot view the other player's items; the player trading with you has not yet finished deciding what items they want to trade.");
+                return;
+            case DECIDE:
+                break;
+            case ACCEPT:
+                player.sendMessage("§cYou cannot view the other player's items; you have already accepted the trade.");
+                return;
+            default:
+                player.sendMessage("§cAn error has occurred while viewing the other player's items. Please send this error to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE VIEWING TRADE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "Player Name: " + player.getName());
+                this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
+                this.logger.log(Level.WARNING, "TradeChest: " + activeTrade.getTradeChest().getName());
+                this.logger.log(Level.WARNING, "Trade Status: " + activeTrade.getTradeStatus().name());
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to view a trade.");
+                this.logger.log(Level.WARNING, "Player matched default case on TradeStatus during trade viewing, meaning they do not have a valid TradeStatus.");
+                return;
+        }
+    
+        final Inventory tradeInventory = this.tradeInventories.get(playerId);
+        if (tradeInventory == null) {
+            player.sendMessage("§cAn error occurred while viewing the other player's items. Please send this error to a server administrator.");
+            this.logger.log(Level.WARNING, "ISSUE WHILE VIEWING TRADE");
+            this.logger.log(Level.WARNING, "Details below:");
+            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
+            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
+            this.logger.log(Level.WARNING, "TradeChest: " + activeTrade.getTradeChest().getName());
+            this.logger.log(Level.WARNING, "Trade Status: " + activeTrade.getTradeStatus().name());
+            this.logger.log(Level.WARNING, "ISSUE:");
+            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to view a trade.");
+            this.logger.log(Level.WARNING, "Player is in the DECIDE phase, but does not have a trade Inventory available.");
+            return;
+        }
+        
+        if (!this.checkInventories(player.getOpenInventory().getTopInventory(), tradeInventory)) {
+            player.closeInventory();
+            player.openInventory(tradeInventory);
+        }
     }
     
     public void acceptTrade(@NotNull final Player player) {

@@ -83,19 +83,11 @@ public final class CVTradeCommand implements TabExecutor {
                 sender.sendMessage(" §f-§r §b/cvtrade info§r §a<name>");
                 optionGiven = true;
             }
-            if (sender.hasPermission("cvtrade.start")) {
+            if (sender.hasPermission("cvtrade.trade")) {
                 sender.sendMessage(" §f-§r §b/cvtrade start§r §a<name>");
-                optionGiven = true;
-            }
-            if (sender.hasPermission("cvtrade.cancel")) {
                 sender.sendMessage(" §f-§r §b/cvtrade cancel");
-                optionGiven = true;
-            }
-            if (sender.hasPermission("cvtrade.ready")) {
                 sender.sendMessage(" §f-§r §b/cvtrade ready");
-                optionGiven = true;
-            }
-            if (sender.hasPermission("cvtrade.complete")) {
+                sender.sendMessage(" §f-§r §b/cvtrade view");
                 sender.sendMessage(" §f-§r §b/cvtrade accept");
                 sender.sendMessage(" §f-§r §b/cvtrade reject");
                 optionGiven = true;
@@ -312,8 +304,16 @@ public final class CVTradeCommand implements TabExecutor {
                 sender.sendMessage(permissionMessage);
                 return true;
             }
-            
+    
             this.tradePlugin.readyTrade(sender);
+            return true;
+        } else if (subCommand.equalsIgnoreCase("view")) {
+            if (!sender.hasPermission("cvtrade.trade")) {
+                sender.sendMessage(permissionMessage);
+                return true;
+            }
+            
+            this.tradePlugin.viewTrade(sender);
             return true;
         } else if (subCommand.equalsIgnoreCase("accept")) {
             if (!sender.hasPermission("cvtrade.trade")) {
@@ -358,6 +358,7 @@ public final class CVTradeCommand implements TabExecutor {
         completions.add("start");
         completions.add("cancel");
         completions.add("ready");
+        completions.add("view");
         completions.add("accept");
         completions.add("reject");
         
@@ -385,14 +386,9 @@ public final class CVTradeCommand implements TabExecutor {
             }
             if (!sender.hasPermission("cvtrade.trade")) {
                 completions.remove("start");
-            }
-            if (!sender.hasPermission("cvtrade.trade")) {
                 completions.remove("cancel");
-            }
-            if (!sender.hasPermission("cvtrade.trade")) {
                 completions.remove("ready");
-            }
-            if (!sender.hasPermission("cvtrade.trade")) {
+                completions.remove("view");
                 completions.remove("accept");
                 completions.remove("reject");
             }
@@ -536,6 +532,10 @@ public final class CVTradeCommand implements TabExecutor {
             return completions;
             
         } else if (subCommand.equalsIgnoreCase("ready")) {
+    
+            return completions;
+    
+        } else if (subCommand.equalsIgnoreCase("view")) {
             
             return completions;
             
