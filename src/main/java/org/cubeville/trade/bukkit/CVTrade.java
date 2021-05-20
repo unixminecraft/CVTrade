@@ -467,6 +467,10 @@ public final class CVTrade extends JavaPlugin {
             return;
         }
         
+        if (!this.scheduledCreations.containsKey(player.getUniqueId())) {
+            return;
+        }
+        
         final String name = this.scheduledCreations.remove(player.getUniqueId());
         if (name == null) {
             player.sendMessage("§cThere was an error with your TradeChest creation.");
@@ -503,6 +507,8 @@ public final class CVTrade extends JavaPlugin {
         this.byName.put(name, tradeChest);
         this.byLocation.put(chest.getLocation(), tradeChest);
         this.saveTradeChest(player, tradeChest);
+        
+        player.sendMessage("§aTradeChest§r §6" + name + "§r §acreated successfully.");
         
         boolean linked = false;
         final Iterator<Map.Entry<TradeChest, TradeChest>> iterator = this.pairings.entrySet().iterator();
@@ -1528,7 +1534,7 @@ public final class CVTrade extends JavaPlugin {
         final UUID playerId = player.getUniqueId();
         final ActiveTrade activeTrade = this.activeTrades.get(playerId);
         if (activeTrade == null) {
-            player.sendMessage("§cYou are not currently in a trade.");
+            player.sendMessage("§cYou are not currently in a trade with anyone.");
             return;
         }
     
@@ -1584,7 +1590,7 @@ public final class CVTrade extends JavaPlugin {
         final UUID playerId = player.getUniqueId();
         final ActiveTrade activeTrade = this.activeTrades.get(playerId);
         if (activeTrade == null) {
-            player.sendMessage("§cYou are not currently in a trade.");
+            player.sendMessage("§cYou are not currently in a trade with anyone.");
             return;
         }
         
