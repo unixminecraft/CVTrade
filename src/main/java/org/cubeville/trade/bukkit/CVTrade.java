@@ -1272,8 +1272,14 @@ public final class CVTrade extends JavaPlugin {
         }
         
         if (linkedTrade == null) {
+            
             player.sendMessage("§6Waiting for the other player to begin the trade...");
             player.sendMessage("§aYou may begin placing the items you wish to trade into the chest.");
+    
+            final ActiveTrade activeTrade = new ActiveTrade(player, tradeChest);
+            this.activeTrades.put(playerId, activeTrade);
+            this.saveActiveTrade(player, activeTrade);
+            
             return;
         }
     
