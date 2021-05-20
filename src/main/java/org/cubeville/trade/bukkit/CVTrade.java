@@ -174,37 +174,42 @@ public final class CVTrade extends JavaPlugin {
             
             final String checkName = linked.getLinked();
             if (checkName == null) {
-                this.linkChests(this.console, tradeChest, linked);
-                ignore.add(linked);
+                if (this.linkChests(this.console, tradeChest, linked)) {
+                    ignore.add(linked);
+                }
                 continue;
             }
             
             if (checkName.equals(tradeChest.getName())) {
-                this.linkChests(this.console, tradeChest, linked);
-                ignore.add(linked);
+                if (this.linkChests(this.console, tradeChest, linked)) {
+                    ignore.add(linked);
+                }
                 continue;
             }
             
             final TradeChest check = this.byName.get(checkName);
             if (check == null) {
                 this.unlinkChest(this.console, linked);
-                this.linkChests(this.console, tradeChest, linked);
-                ignore.add(linked);
+                if (this.linkChests(this.console, tradeChest, linked)) {
+                    ignore.add(linked);
+                }
                 continue;
             }
             
             final String checkLinkedName = check.getLinked();
             if (checkLinkedName == null) {
                 this.unlinkChest(this.console, linked);
-                this.linkChests(this.console, tradeChest, linked);
-                ignore.add(linked);
+                if (this.linkChests(this.console, tradeChest, linked)) {
+                    ignore.add(linked);
+                }
                 continue;
             }
             
             if (!checkLinkedName.equals(linked.getName())) {
                 this.unlinkChest(this.console, linked);
-                this.linkChests(this.console, tradeChest, linked);
-                ignore.add(linked);
+                if (this.linkChests(this.console, tradeChest, linked)) {
+                    ignore.add(linked);
+                }
                 continue;
             }
             
@@ -532,7 +537,9 @@ public final class CVTrade extends JavaPlugin {
                 continue;
             }
             
-            this.linkChests(player, tradeChest, unpairedChest);
+            if (!this.linkChests(player, tradeChest, unpairedChest)) {
+                continue;
+            }
             player.sendMessage("&bThis TradeChest has been automatically linked with another TradeChest§r §6(" + unpairedChest.getName() + ")§r§b.");
             linked = true;
             iterator.remove();
@@ -868,16 +875,22 @@ public final class CVTrade extends JavaPlugin {
         // No links set up yet. Link the TradeChests.
         if (check1 == null && check2 == null) {
             
-            this.linkChests(player, chest1, chest2);
-            player.sendMessage("§aSuccessfully linked the TradeChests.");
+            if (this.linkChests(player, chest1, chest2)) {
+                player.sendMessage("§aSuccessfully linked the TradeChests.");
+            } else {
+                player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+            }
             
         // No link on Chest1 yet.
         } else if (check1 == null) {
             
             // Chest2 is linked to Chest1. Finish the link.
             if (check2.equals(chest1)) {
-                this.linkChests(player, chest1, chest2);
-                player.sendMessage("§6Finished linking the TradeChests (was partially linked before).");
+                if (this.linkChests(player, chest1, chest2)) {
+                    player.sendMessage("§6Finished linking the TradeChests (was partially linked before).");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
                 
             // Chest2 is linked to some "Chest3".
             } else {
@@ -885,8 +898,11 @@ public final class CVTrade extends JavaPlugin {
                 
                 // "Chest3" has no link. Link Chest1 and Chest2.
                 if (check3 == null) {
-                    this.linkChests(player, chest1, chest2);
-                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    if (this.linkChests(player, chest1, chest2)) {
+                        player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    } else {
+                        player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                    }
                     
                 // "Chest3" is linked to Chest2. Unlink Chest1.
                 } else if (check3.equals(chest2)) {
@@ -895,8 +911,11 @@ public final class CVTrade extends JavaPlugin {
                     
                 // "Chest3" is linked to some "Chest4". Re-link Chest1 and Chest2.
                 } else {
-                    this.linkChests(player, chest1, chest2);
-                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    if (this.linkChests(player, chest1, chest2)) {
+                        player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    } else {
+                        player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                    }
                 }
             }
             
@@ -905,8 +924,11 @@ public final class CVTrade extends JavaPlugin {
             
             // Chest1 is linked to Chest2. Finish the link.
             if (check1.equals(chest2)) {
-                this.linkChests(player, chest1, chest2);
-                player.sendMessage("§6Finished linking the TradeChests (was partially linked before).");
+                if (this.linkChests(player, chest1, chest2)) {
+                    player.sendMessage("§6Finished linking the TradeChests (was partially linked before).");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
                 
             // Chest1 is linked to some "Chest3".
             } else {
@@ -914,8 +936,11 @@ public final class CVTrade extends JavaPlugin {
                 
                 // "Chest3" has no link. Link Chest1 and Chest2.
                 if (check3 == null) {
-                    this.linkChests(player, chest1, chest2);
-                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    if (this.linkChests(player, chest1, chest2)) {
+                        player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    } else {
+                        player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                    }
                     
                 // "Chest3" is linked to Chest1. Unlink Chest2.
                 } else if (check3.equals(chest1)) {
@@ -924,8 +949,11 @@ public final class CVTrade extends JavaPlugin {
     
                     // "Chest3" is linked to some "Chest4". Re-link Chest1 and Chest2.
                 } else {
-                    this.linkChests(player, chest1, chest2);
-                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    if (this.linkChests(player, chest1, chest2)) {
+                        player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                    } else {
+                        player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                    }
                 }
             }
             
@@ -940,8 +968,11 @@ public final class CVTrade extends JavaPlugin {
     
             // "Chest3" has no link. Link Chest1 and Chest2.
             if (check3 == null) {
-                this.linkChests(player, chest1, chest2);
-                player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                if (this.linkChests(player, chest1, chest2)) {
+                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
         
                 // "Chest3" is linked to Chest2. Unlink Chest1.
             } else if (check3.equals(chest2)) {
@@ -950,8 +981,11 @@ public final class CVTrade extends JavaPlugin {
         
                 // "Chest3" is linked to some "Chest4". Re-link Chest1 and Chest2.
             } else {
-                this.linkChests(player, chest1, chest2);
-                player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                if (this.linkChests(player, chest1, chest2)) {
+                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
             }
             
         // Chest2 is linked to Chest1, Chest1, is linked to some "Chest3".
@@ -960,8 +994,11 @@ public final class CVTrade extends JavaPlugin {
     
             // "Chest3" has no link. Link Chest1 and Chest2.
             if (check3 == null) {
-                this.linkChests(player, chest1, chest2);
-                player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                if (this.linkChests(player, chest1, chest2)) {
+                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
         
             // "Chest3" is linked to Chest1. Unlink Chest2.
             } else if (check3.equals(chest1)) {
@@ -970,8 +1007,11 @@ public final class CVTrade extends JavaPlugin {
         
             // "Chest3" is linked to some "Chest4". Re-link Chest1 and Chest2.
             } else {
-                this.linkChests(player, chest1, chest2);
-                player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                if (this.linkChests(player, chest1, chest2)) {
+                    player.sendMessage("§6Corrected an incorrectly-linked TradeChest setup. The link has been completed.");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
             }
             
         // Neither TradeChest is linked to the other.
@@ -980,9 +1020,12 @@ public final class CVTrade extends JavaPlugin {
             
             final TradeChest check3 = this.pairings.get(check1);
             if (check3 == null) {
-                this.linkChests(player, chest1, check1);
-                player.sendMessage("§cTradeChest§r §6" + name1 + "§r §cwas partially linked to another TradeChest, correcting that link.");
-                player.sendMessage("§cNo link will be made between§r §6" + name1 + "§r §cand§r §6" + name2 + "§r §c.");
+                if (this.linkChests(player, chest1, check1)) {
+                    player.sendMessage("§cTradeChest§r §6" + name1 + "§r §cwas partially linked to another TradeChest, correcting that link.");
+                    player.sendMessage("§cNo link will be made between§r §6" + name1 + "§r §cand§r §6" + name2 + "§r §c.");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
             } else if (check3.equals(chest1)) {
                 player.sendMessage("§cTradeChest§r §6" + name1 + "§r §cis linked to another TradeChest, correcting that link.");
                 player.sendMessage("§cNo link will be made between§r §6" + name1 + "§r §cand§r §6" + name2 + "§r §c.");
@@ -993,15 +1036,21 @@ public final class CVTrade extends JavaPlugin {
             
             final TradeChest check4 = this.pairings.get(check2);
             if (check4 == null) {
-                this.linkChests(player, chest2, check2);
-                player.sendMessage("§cTradeChest§r §6" + name2 + "§r §cwas partially linked to another TradeChest, correcting that link.");
-                player.sendMessage("§cNo link will be made between§r §6" + name1 + "§r §cand§r §6" + name2 + "§r §c.");
+                if (this.linkChests(player, chest2, check2)) {
+                    player.sendMessage("§cTradeChest§r §6" + name2 + "§r §cwas partially linked to another TradeChest, correcting that link.");
+                    player.sendMessage("§cNo link will be made between§r §6" + name1 + "§r §cand§r §6" + name2 + "§r §c.");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
             } else if (check4.equals(chest2)) {
                 player.sendMessage("§cTradeChest§r §6" + name2 + "§r §cis linked to another TradeChest, correcting that link.");
                 player.sendMessage("§cNo link will be made between§r §6" + name1 + "§r §cand§r §6" + name2 + "§r §c.");
             } else if (canLink) {
-                this.linkChests(player, chest1, chest2);
-                player.sendMessage("§6There were bad links between the 2 TradeChests and others. They have been cleaned up and the 2 TradeChests linked.");
+                if (this.linkChests(player, chest1, chest2)) {
+                    player.sendMessage("§6There were bad links between the 2 TradeChests and others. They have been cleaned up and the 2 TradeChests linked.");
+                } else {
+                    player.sendMessage("§cThe chests could not be linked, please notify a server administrator.");
+                }
             } else {
                 this.unlinkChest(player, chest2);
                 player.sendMessage("§cUnable to link the TradeChests due to other existing links to other TradeChests.");
@@ -1948,7 +1997,7 @@ public final class CVTrade extends JavaPlugin {
         return true;
     }
     
-    private void linkChests(@NotNull final CommandSender sender, @NotNull final TradeChest chest1, @NotNull final TradeChest chest2) {
+    private boolean linkChests(@NotNull final CommandSender sender, @NotNull final TradeChest chest1, @NotNull final TradeChest chest2) {
         
         try {
             chest2.link(chest1);
@@ -1962,7 +2011,7 @@ public final class CVTrade extends JavaPlugin {
             this.logger.log(Level.WARNING, "ISSUE:");
             this.logger.log(Level.WARNING, "Player " + sender.getName() + " is attempting to link 2 TradeChests.");
             this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-            return;
+            return false;
         }
         
         this.pairings.put(chest1, chest2);
@@ -1970,6 +2019,7 @@ public final class CVTrade extends JavaPlugin {
         
         this.saveTradeChest(sender, chest1);
         this.saveTradeChest(sender, chest2);
+        return true;
     }
     
     private void unlinkChest(@NotNull final CommandSender sender, @NotNull final TradeChest tradeChest) {
