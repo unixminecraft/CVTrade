@@ -1186,15 +1186,15 @@ public final class CVTrade extends JavaPlugin {
         sender.sendMessage("§8================================");
         sender.sendMessage("§fName:§r §6" + tradeChest.getName());
         sender.sendMessage("§8--------------------------------");
-        sender.sendMessage("§fWorld   :§r §b" + location.getWorld().getName());
-        sender.sendMessage("§fX-Coord :§r §b" + location.getBlockX());
-        sender.sendMessage("§fY-Coord :§r §b" + location.getBlockY());
-        sender.sendMessage("§fZ-Coord :§r §b" + location.getBlockZ());
+        sender.sendMessage("§fWorld:§r §b" + location.getWorld().getName());
+        sender.sendMessage("§fX-Coord:§r §b" + location.getBlockX());
+        sender.sendMessage("§fY-Coord:§r §b" + location.getBlockY());
+        sender.sendMessage("§fZ-Coord:§r §b" + location.getBlockZ());
         sender.sendMessage("§8--------------------------------");
-        sender.sendMessage("§fIs Linked    :§r §" + (linkedChest == null ? "cNo" : "aYes"));
+        sender.sendMessage("§fIs Linked:§r §" + (linkedChest == null ? "cNo" : "aYes"));
         
         if (linkedChest != null) {
-            sender.sendMessage("§fLinked Chest :§r §b" + linkedChest.getName());
+            sender.sendMessage("§fLinked Chest:§r §b" + linkedChest.getName());
         }
     
         sender.sendMessage("§8================================");
@@ -1949,8 +1949,21 @@ public final class CVTrade extends JavaPlugin {
     }
     
     private void linkChests(@NotNull final CommandSender sender, @NotNull final TradeChest chest1, @NotNull final TradeChest chest2) {
-        chest2.link(chest1);
-        chest1.link(chest2);
+        
+        try {
+            chest2.link(chest1);
+            chest1.link(chest2);
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage(e.getMessage());
+            this.logger.log(Level.WARNING, "ISSUE WHILE LINKING TRADECHESTS");
+            this.logger.log(Level.WARNING, "Details below:");
+            this.logger.log(Level.WARNING, "TradeChest 1:" + chest1.getName());
+            this.logger.log(Level.WARNING, "TradeChest 2:" + chest2.getName());
+            this.logger.log(Level.WARNING, "ISSUE:");
+            this.logger.log(Level.WARNING, "Player " + sender.getName() + " is attempting to link 2 TradeChests.");
+            this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+            return;
+        }
         
         this.pairings.put(chest1, chest2);
         this.pairings.put(chest2, chest1);
@@ -2019,19 +2032,23 @@ public final class CVTrade extends JavaPlugin {
                 if (!tradeChestFile.exists()) {
                     if (!tradeChestFile.createNewFile()) {
                         sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
+                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
+                        this.logger.log(Level.WARNING, "TradeChest YAML Data: " + tradeChest.serialize().toString());
+                        this.logger.log(Level.WARNING, "ISSUE:");
                         this.logger.log(Level.WARNING, "TradeChest file not created successfully.");
-                        this.logger.log(Level.WARNING, "TradeChest file location: " + tradeChestFile.getPath());
-                        this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
-                        this.logger.log(Level.WARNING, "tradechest: " + tradeChest.serialize().toString());
                         return;
                     }
                 }
             } catch (SecurityException | IOException e) {
                 sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
+                this.logger.log(Level.WARNING, "TradeChest YAML Data: " + tradeChest.serialize().toString());
+                this.logger.log(Level.WARNING, "ISSUE:");
                 this.logger.log(Level.WARNING, "Unable to create TradeChest file.");
-                this.logger.log(Level.WARNING, "TradeChest file location: " + tradeChestFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
-                this.logger.log(Level.WARNING, "tradechest: " + tradeChest.serialize().toString());
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 return;
             }
@@ -2042,10 +2059,12 @@ public final class CVTrade extends JavaPlugin {
                 config.save(tradeChestFile);
             } catch (IOException | IllegalArgumentException e) {
                 sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
+                this.logger.log(Level.WARNING, "TradeChest YAML Data: " + tradeChest.serialize().toString());
+                this.logger.log(Level.WARNING, "ISSUE:");
                 this.logger.log(Level.WARNING, "Unable to save TradeChest configuration file.");
-                this.logger.log(Level.WARNING, "TradeChest file location: " + tradeChestFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
-                this.logger.log(Level.WARNING, "tradechest: " + tradeChest.serialize().toString());
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
@@ -2060,25 +2079,31 @@ public final class CVTrade extends JavaPlugin {
                 if (!activeTradeFile.exists()) {
                     if (!activeTradeFile.createNewFile()) {
                         sender.sendMessage("There was an error while updating your trade. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "ActiveTrade file not created successfully.");
-                        this.logger.log(Level.WARNING, "ActiveTrade file location: " + activeTradeFile.getPath());
-                        this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING ACTIVETRADE FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
+                        this.logger.log(Level.WARNING, "ActiveTrade YAML Data:");
                         this.logger.log(Level.WARNING, "uuid: " + activeTrade.getUniqueId().toString());
                         this.logger.log(Level.WARNING, "name: " + activeTrade.getName());
                         this.logger.log(Level.WARNING, "trade_chest:" + activeTrade.getTradeChest().getName());
                         this.logger.log(Level.WARNING, "trade_status: " + activeTrade.getTradeStatus().name());
+                        this.logger.log(Level.WARNING, "ISSUE:");
+                        this.logger.log(Level.WARNING, "ActiveTrade file not created successfully.");
                         return;
                     }
                 }
             } catch (SecurityException | IOException e) {
                 sender.sendMessage("There was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "Unable to create ActiveTrade file.");
-                this.logger.log(Level.WARNING, "ActiveTrade file location: " + activeTradeFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING ACTIVETRADE FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
+                this.logger.log(Level.WARNING, "ActiveTrade YAML Data:");
                 this.logger.log(Level.WARNING, "uuid: " + activeTrade.getUniqueId().toString());
                 this.logger.log(Level.WARNING, "name: " + activeTrade.getName());
                 this.logger.log(Level.WARNING, "trade_chest:" + activeTrade.getTradeChest().getName());
                 this.logger.log(Level.WARNING, "trade_status: " + activeTrade.getTradeStatus().name());
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to create ActiveTrade file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 return;
             }
@@ -2092,13 +2117,16 @@ public final class CVTrade extends JavaPlugin {
                 config.save(activeTradeFile);
             } catch (IOException | IllegalArgumentException e) {
                 sender.sendMessage("There was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "Unable to save ActiveTrade configuration file.");
-                this.logger.log(Level.WARNING, "ActiveTrade file location: " + activeTradeFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING ACTIVETRADE FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
+                this.logger.log(Level.WARNING, "ActiveTrade YAML Data:");
                 this.logger.log(Level.WARNING, "uuid: " + activeTrade.getUniqueId().toString());
                 this.logger.log(Level.WARNING, "name: " + activeTrade.getName());
                 this.logger.log(Level.WARNING, "trade_chest:" + activeTrade.getTradeChest().getName());
                 this.logger.log(Level.WARNING, "trade_status: " + activeTrade.getTradeStatus().name());
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to save ActiveTrade configuration file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
@@ -2118,21 +2146,27 @@ public final class CVTrade extends JavaPlugin {
                 if (!backupInventoryFile.exists()) {
                     if (!backupInventoryFile.createNewFile()) {
                         sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "Backup inventory file not created successfully.");
-                        this.logger.log(Level.WARNING, "Backup inventory file location: " + backupInventoryFile.getPath());
-                        this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
                         this.logger.log(Level.WARNING, "trade_chest_name:" + tradeChest.getName());
                         this.logger.log(Level.WARNING, "items: " + items.toString());
+                        this.logger.log(Level.WARNING, "ISSUE:");
+                        this.logger.log(Level.WARNING, "Backup Inventory file not created successfully.");
                         return;
                     }
                 }
             } catch (SecurityException | IOException e) {
                 sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "Unable to create backup inventory file.");
-                this.logger.log(Level.WARNING, "Backup inventory file location: " + backupInventoryFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
                 this.logger.log(Level.WARNING, "trade_chest_name:" + tradeChest.getName());
                 this.logger.log(Level.WARNING, "items: " + items.toString());
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to create Backup Inventory file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 return;
             }
@@ -2144,11 +2178,14 @@ public final class CVTrade extends JavaPlugin {
                 config.save(backupInventoryFile);
             } catch (IOException | IllegalArgumentException e) {
                 sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "Unable to save backup inventory configuration file.");
-                this.logger.log(Level.WARNING, "Backup inventory file location: " + backupInventoryFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
                 this.logger.log(Level.WARNING, "trade_chest_name:" + tradeChest.getName());
                 this.logger.log(Level.WARNING, "items: " + items.toString());
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to save Backup Inventory configuration file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
@@ -2179,27 +2216,33 @@ public final class CVTrade extends JavaPlugin {
                 if (!offlineInventoryFile.exists()) {
                     if (!offlineInventoryFile.createNewFile()) {
                         sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                        this.logger.log(Level.WARNING, "OfflineTrader file not created successfully.");
-                        this.logger.log(Level.WARNING, "OfflineTrader file location: " + offlineInventoryFile.getPath());
-                        this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
                         this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
                         this.logger.log(Level.WARNING, "name:" + playerName);
                         this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
                         this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
                         this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
+                        this.logger.log(Level.WARNING, "ISSUE:");
+                        this.logger.log(Level.WARNING, "OfflineTrader file not created successfully.");
                         return;
                     }
                 }
             } catch (SecurityException | IOException e) {
                 sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "Unable to create OfflineTrader file.");
-                this.logger.log(Level.WARNING, "OfflineTrader file location: " + offlineInventoryFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
                 this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
                 this.logger.log(Level.WARNING, "name:" + playerName);
                 this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
                 this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
                 this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to create OfflineTrader file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 return;
             }
@@ -2214,14 +2257,17 @@ public final class CVTrade extends JavaPlugin {
                 config.save(offlineInventoryFile);
             } catch (IOException | IllegalArgumentException e) {
                 sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "Unable to save OfflineTrader configuration file.");
-                this.logger.log(Level.WARNING, "OfflineTrader file location: " + offlineInventoryFile.getPath());
-                this.logger.log(Level.WARNING, "The data to save would have been the following (YAML format):");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
                 this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
                 this.logger.log(Level.WARNING, "name:" + playerName);
                 this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
                 this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
                 this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to save OfflineTrader configuration file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
@@ -2240,14 +2286,20 @@ public final class CVTrade extends JavaPlugin {
                 if (tradeChestFile.exists()) {
                     if (!tradeChestFile.delete()) {
                         sender.sendMessage("§cThere was an error while deleting the TradeChest. Please report this error to a server administrator.");
+                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING TRADECHEST FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
+                        this.logger.log(Level.WARNING, "ISSUE:");
                         this.logger.log(Level.WARNING, "TradeChest file not deleted successfully.");
-                        this.logger.log(Level.WARNING, "TradeChest file location: " + tradeChestFile.getPath());
                     }
                 }
             } catch (SecurityException e) {
                 sender.sendMessage("§cThere was an error while deleting the TradeChest. Please report this error to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING TRADECHEST FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
+                this.logger.log(Level.WARNING, "ISSUE:");
                 this.logger.log(Level.WARNING, "Unable to delete TradeChest file.");
-                this.logger.log(Level.WARNING, "TradeChest file location: " + tradeChestFile.getPath());
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
@@ -2262,14 +2314,20 @@ public final class CVTrade extends JavaPlugin {
                 if (activeTradeFile.exists()) {
                     if (!activeTradeFile.delete()) {
                         sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
+                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING ACTIVETRADE FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
+                        this.logger.log(Level.WARNING, "ISSUE:");
                         this.logger.log(Level.WARNING, "ActiveTrade file not deleted successfully.");
-                        this.logger.log(Level.WARNING, "ActiveTrade file location: " + activeTradeFile.getPath());
                     }
                 }
             } catch (SecurityException e) {
                 sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING ACTIVETRADE FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
+                this.logger.log(Level.WARNING, "ISSUE:");
                 this.logger.log(Level.WARNING, "Unable to delete ActiveTrade file.");
-                this.logger.log(Level.WARNING, "ActiveTrade file location: " + activeTradeFile.getPath());
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
@@ -2284,14 +2342,20 @@ public final class CVTrade extends JavaPlugin {
                 if (backupInventoryFile.exists()) {
                     if (!backupInventoryFile.delete()) {
                         sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "Unable to delete backup inventory file.");
-                        this.logger.log(Level.WARNING, "Backup inventory file location: " + backupInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING BACKUP INVENTORY FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "ISSUE:");
+                        this.logger.log(Level.WARNING, "Backup Inventory file not deleted successfully.");
                     }
                 }
             } catch (SecurityException e) {
                 sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "Unable to delete backup inventory file.");
-                this.logger.log(Level.WARNING, "Backup inventory file location: " + backupInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING BACKUP INVENTORY FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to delete Backup Inventory file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
@@ -2307,14 +2371,20 @@ public final class CVTrade extends JavaPlugin {
                 if (offlineInventoryFile.exists()) {
                     if (!offlineInventoryFile.delete()) {
                         sender.sendMessage("§cThere was an error while returning your items. Please report this to a server administrator.");
-                        this.logger.log(Level.WARNING, "Unable to delete OfflineTrader file.");
-                        this.logger.log(Level.WARNING, "Offline inventory file location: " + offlineInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "ISSUE:");
+                        this.logger.log(Level.WARNING, "OfflineTrader file not deleted successfully.");
                     }
                 }
             } catch (SecurityException e) {
                 sender.sendMessage("§cThere was an error while returning your items. Please report this to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "ISSUE:");
                 this.logger.log(Level.WARNING, "Unable to delete OfflineTrader file.");
-                this.logger.log(Level.WARNING, "Offline inventory file location: " + offlineInventoryFile.getPath());
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });

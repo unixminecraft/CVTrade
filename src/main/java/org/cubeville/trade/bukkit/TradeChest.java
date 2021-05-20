@@ -76,12 +76,12 @@ public final class TradeChest implements ConfigurationSerializable {
     
     public void link(@NotNull final TradeChest linkedChest) throws IllegalArgumentException {
         if (this.equals(linkedChest)) {
-            throw new IllegalArgumentException("You may not link this TradeChest to itself.");
+            throw new IllegalArgumentException("§cYou may not link this TradeChest (§r§6" + this.name + "§r§c) to itself.");
         }
         
-        final String linkedName = linkedChest.getLinked();
-        if (linkedName != null && !linkedName.equals(this.getName())) {
-            throw new IllegalArgumentException("You may not link this TradeChest to another TradeChest that is linked to a 3rd TradeChest.");
+        final String checkName = linkedChest.getLinked();
+        if (checkName != null && !checkName.equals(this.getName())) {
+            throw new IllegalArgumentException("§cYou may not link this TradeChest (§r§6" + this.name + "§r§c) to another TradeChest (§r§6" + linkedChest.getName() + "§r§c) that is linked to a 3rd TradeChest (§r§6" + checkName + "§r§c).");
         }
         
         this.linkedChestName = linkedChest.getName();
