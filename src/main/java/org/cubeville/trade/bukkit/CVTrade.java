@@ -271,26 +271,35 @@ public final class CVTrade extends JavaPlugin {
                 continue;
             }
             
-            final Inventory inventory = this.getServer().createInventory(null, 27);
+            final Inventory backupInventory = this.getServer().createInventory(null, 27);
             final List<Map<String, Object>> items = (List<Map<String, Object>>) config.getList("items");
             
             int slot = 0;
             for (final Map<String, Object> item : items) {
                 if (item == null) {
-                    inventory.setItem(slot, null);
+                    backupInventory.setItem(slot, null);
                 } else {
-                    inventory.setItem(slot, ItemStack.deserialize(item));
+                    backupInventory.setItem(slot, ItemStack.deserialize(item));
                 }
                 slot++;
             }
             
             slot = 0;
             final Inventory chestInventory = tradeChest.getChest().getInventory();
-            for (final ItemStack item : inventory.getStorageContents()) {
-                if (!item.equals(chestInventory.getStorageContents()[slot])) {
-                    chestInventory.setItem(slot, item);
+            for (final ItemStack backupItem : backupInventory.getStorageContents()) {
+                if (backupItem == null && chestInventory.getStorageContents()[slot] == null) {
+                    slot++;
+                } else if (backupItem == null) {
+                    chestInventory.setItem(slot, backupItem);
+                    slot++;
+                } else if (chestInventory.getStorageContents()[slot] == null) {
+                    chestInventory.setItem(slot, backupItem);
+                    slot++;
+                } else if (!backupItem.equals(chestInventory.getStorageContents()[slot])) {
+                    chestInventory.setItem(slot, backupItem);
+                    slot++;
                 }
-                slot++;
+                
             }
         }
         
