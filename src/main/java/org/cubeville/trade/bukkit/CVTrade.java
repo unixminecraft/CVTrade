@@ -2365,7 +2365,7 @@ public final class CVTrade extends JavaPlugin {
         
         this.scheduler.runTaskAsynchronously(this, () -> {
     
-            final File backupInventoryFile = new File(this.backupInventoryFolder, "BackupInventory- " + tradeChest.getName() + ".yml");
+            final File backupInventoryFile = new File(this.backupInventoryFolder, "BackupInventory-" + tradeChest.getName() + ".yml");
             try {
                 if (backupInventoryFile.exists()) {
                     if (!backupInventoryFile.delete()) {
