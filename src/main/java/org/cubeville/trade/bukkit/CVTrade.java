@@ -424,7 +424,7 @@ public final class CVTrade extends JavaPlugin {
                     
                     this.deleteActiveTrade(this.console, otherTrade);
                     otherChest.getChest().getInventory().clear();
-                    this.deleteTradeChest(this.console, otherChest);
+                    this.deleteChestInventory(this.console, otherChest);
                     tradeIterator.remove();
                 }
             }
@@ -611,12 +611,13 @@ public final class CVTrade extends JavaPlugin {
         }
         
         if (activeTrade == null) {
-            return false;
+            player.sendMessage("§cYou may not open this TradeChest as you are not using it.");
+            player.sendMessage("§cIf you wish to use this TradeChest, please start a trade.");
+            return true;
         }
         
         if (!activeTrade.getUniqueId().equals(player.getUniqueId())) {
-            player.sendMessage("§cThis chest is a TradeChest, and you are not actively using this chest for a trade.");
-            player.sendMessage("§cPlease start a trade using this chest. If you did start a trade using this chest, please report this to a server administrator.");
+            player.sendMessage("§cYou may not open this TradeChest as another player is using it for a trade.");
             return true;
         }
         
