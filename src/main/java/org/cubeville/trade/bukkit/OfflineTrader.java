@@ -23,16 +23,18 @@
 package org.cubeville.trade.bukkit;
 
 import java.util.UUID;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 final class OfflineTrader {
     
     enum CompleteReason {
-        OFFLINE_SELF("§cYour trade has been cancelled because you were offline for too long, and the trade was automatically cancelled."),
-        OFFLINE_OTHER("§cYour trade has been cancelled because the other player was offline for too long, and the trade was automatically cancelled."),
+        OFFLINE_SELF("§cYour trade has been automatically cancelled because you were offline for too long."),
+        OFFLINE_OTHER("§cYour trade has been automatically cancelled because the other player was offline for too long."),
         CANCELLED("§cYour trade has been cancelled because the other player cancelled the trade while you were offline."),
         REJECTED("§cYour trade has been cancelled because the other player rejected your trade offer while you were offline."),
         ACCEPTED("§aYour trade has been finished because the other player accepted your trade offer while you were offline."),
@@ -100,6 +102,17 @@ final class OfflineTrader {
     }
     
     void setInventory(@Nullable final Inventory inventory) {
-        this.inventory = inventory;
+        
+        if (inventory == null) {
+            this.inventory = null;
+            return;
+        }
+        
+        this.inventory = Bukkit.getServer().createInventory(null, 27);
+        
+        final ItemStack[] items = inventory.getStorageContents();
+        for (int slot = 0; slot < items.length; slot++) {
+            this.inventory.setItem(slot, items[slot]);
+        }
     }
 }

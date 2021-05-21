@@ -25,6 +25,7 @@ package org.cubeville.trade.bukkit;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -434,6 +435,26 @@ public final class CVTrade extends JavaPlugin {
     // EVENT HANDLER METHODS //
     ///////////////////////////
     
+    public boolean blockBreak(@NotNull final Chest chest) {
+        return this.byLocation.containsKey(chest.getLocation());
+    }
+    
+    public boolean blockPlace(@NotNull final Chest chest) {
+        
+        final Location location = chest.getLocation();
+        if (this.byLocation.containsKey(location.add(1.0D, 0.0D, 0.0D))) {
+            return true;
+        } else if (this.byLocation.containsKey(location.add(-2.0D, 0.0D, 0.0D))) {
+            return true;
+        } else if (this.byLocation.containsKey(location.add(1.0D, 0.0D, 1.0D))) {
+            return true;
+        } else if (this.byLocation.containsKey(location.add(0.0D, 0.0D, -2.0D))) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+    
     public boolean inventoryClick(@NotNull final Player player, @NotNull final Inventory inventory, final int slot) {
         
         final UUID playerId = player.getUniqueId();
@@ -473,6 +494,21 @@ public final class CVTrade extends JavaPlugin {
         }
         
         return true;
+    }
+    
+    @NotNull
+    public Collection<String> playerCommandSend(@NotNull final Player player) {
+        
+        final HashSet<String> removals = new HashSet<String>();
+        for (final String commandName : this.getDescription().getCommands().keySet()) {
+            
+            removals.add("cvtrade:" + commandName);
+            if (!player.hasPermission(this.getServer().getPluginCommand(commandName).getPermission())) {
+                removals.add(commandName);
+            }
+        }
+    
+        return removals;
     }
     
     public void performCreate(@NotNull final Player player, @NotNull final Block block) {
@@ -833,7 +869,7 @@ public final class CVTrade extends JavaPlugin {
         final UUID otherPlayerId = linkedTrade.getUniqueId();
         final Player otherPlayer = this.getServer().getPlayer(otherPlayerId);
         if (otherPlayer != null && otherPlayer.isOnline()) {
-            otherPlayer.sendMessage("§b" + player.getName() + "§r §6has logged out. They have 5 minutes to log back in, or your trade with them will be automatically cancelled.");
+            otherPlayer.sendMessage("§b" + player.getName() + "§r §6has logged out. They have§r §b" + this.formatTime(offlineTrader.getLogoutTime()) + "§r §6to log back in, or your trade with them will be automatically cancelled.");
             otherPlayer.sendMessage("§6You may also cancel the trade early yourself.");
         }
     }
@@ -1039,36 +1075,42 @@ public final class CVTrade extends JavaPlugin {
         }
     }
     
-    public void unlinkChest(@NotNull final Player player, @NotNull final String name) {
+    public boolean unlinkChest(@NotNull final Player player, @NotNull final String name, final boolean unlink) {
     
         final TradeChest tradeChest = this.byName.get(name);
         if (tradeChest == null) {
             player.sendMessage("§cThe TradeChest§r §6" + name + "§r §cdoes not exist. Please verify that you spelled the name correctly.");
-            return;
+            return false;
         }
         
         final TradeChest linkedChest = this.pairings.get(tradeChest);
         if (linkedChest == null) {
-            player.sendMessage("§6This TradeChest is not linked to any other TradeChest. No action required.");
-            return;
+            if (unlink) {
+                player.sendMessage("§6This TradeChest is not linked to any other TradeChest. No action required.");
+            }
+            return true;
         }
         
         for (final ActiveTrade activeTrade : this.activeTrades.values()) {
             if (activeTrade.getTradeChest().equals(tradeChest)) {
                 player.sendMessage("§cThis TradeChest is being used in a trade at the moment. You may not unlink it.");
-                return;
+                return false;
             }
             if (activeTrade.getTradeChest().equals(linkedChest)) {
                 player.sendMessage("§cThe TradeChest that is linked to this TradeChest is being used in a trade at the moment. You may not unlink it.");
-                return;
+                return false;
             }
         }
         
         final TradeChest checkChest = this.pairings.get(linkedChest);
         if (checkChest == null) {
-            player.sendMessage("§6The link was not fully set up. No unlinking required on the linked TradeChest.");
+            if (unlink) {
+                player.sendMessage("§6The link was not fully set up. No unlinking required on the linked TradeChest.");
+            }
         } else if (!checkChest.equals(tradeChest)) {
-            player.sendMessage("§6Bad link from this TradeChest to its linked TradeChest. No unlinking required on the linked TradeChest.");
+            if (unlink) {
+                player.sendMessage("§6Bad link from this TradeChest to its linked TradeChest. No unlinking required on the linked TradeChest.");
+            }
         } else {
             this.unlinkChest(player, linkedChest);
             player.sendMessage("§aLinked TradeChest unlinked from this TradeChest successfully.");
@@ -1081,7 +1123,7 @@ public final class CVTrade extends JavaPlugin {
         final Iterator<Map.Entry<TradeChest, TradeChest>> iterator = this.pairings.entrySet().iterator();
         while (iterator.hasNext()) {
             final Map.Entry<TradeChest, TradeChest> entry = iterator.next();
-            if (entry.getValue().equals(tradeChest)) {
+            if (entry.getValue() != null && entry.getValue().equals(tradeChest)) {
                 unlinked.add(entry.getKey());
                 iterator.remove();
             }
@@ -1094,6 +1136,8 @@ public final class CVTrade extends JavaPlugin {
         if (!unlinked.isEmpty()) {
             player.sendMessage("§aOther TradeChests had their links to this TradeChest removed.");
         }
+        
+        return true;
     }
     
     public void deleteChest(@NotNull final Player player, @NotNull final String name) {
@@ -1124,6 +1168,8 @@ public final class CVTrade extends JavaPlugin {
         this.byLocation.remove(tradeChest.getChest().getLocation());
         this.pairings.remove(tradeChest);
         this.deleteTradeChest(player, tradeChest);
+        
+        player.sendMessage("§aTradeChest deleted successfully.");
     }
     
     public void listChests(@NotNull final Player player, final boolean small) {
@@ -1656,10 +1702,6 @@ public final class CVTrade extends JavaPlugin {
                 return;
         }
         
-        activeTrade.setTradeStatus(ActiveTrade.TradeStatus.ACCEPT);
-        this.saveActiveTrade(player, activeTrade);
-        this.activeTrades.put(playerId, activeTrade);
-        
         final TradeChest tradeChest = activeTrade.getTradeChest();
         final TradeChest linkedChest = this.pairings.get(tradeChest);
         if (linkedChest == null) {
@@ -1700,6 +1742,17 @@ public final class CVTrade extends JavaPlugin {
         
         player.sendMessage("§aYou have accepted the trade.");
         if (linkedTrade.getTradeStatus() != ActiveTrade.TradeStatus.ACCEPT) {
+    
+            if (this.tradeInventories.containsKey(playerId)) {
+                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
+                    player.closeInventory();
+                }
+            }
+    
+            activeTrade.setTradeStatus(ActiveTrade.TradeStatus.ACCEPT);
+            this.saveActiveTrade(player, activeTrade);
+            this.activeTrades.put(playerId, activeTrade);
+            
             player.sendMessage("§6You are waiting on the other player to make a decision. Please continue to wait...");
             return;
         }
@@ -1738,13 +1791,14 @@ public final class CVTrade extends JavaPlugin {
     
             player.sendMessage("§aTrade complete!");
             otherPlayer.sendMessage("§aTrade complete!");
+            return;
         }
         
         OfflineTrader otherOfflineTrader = this.offlineTraders.get(otherPlayerId);
         if (otherOfflineTrader == null) {
     
             player.sendMessage("§cThere was an error accepting your trade. Please report this to a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE STARTING A TRADE");
+            this.logger.log(Level.WARNING, "ISSUE WHILE ACCEPTING A TRADE");
             this.logger.log(Level.WARNING, "Details below:");
             this.logger.log(Level.WARNING, "Player Name: " + player.getName());
             this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
@@ -1958,6 +2012,10 @@ public final class CVTrade extends JavaPlugin {
             builder.append(minutes).append(" minute, ");
         }
         
+        if (!builder.toString().isEmpty() && seconds == 0L) {
+            return builder.toString();
+        }
+        
         builder.append(seconds).append(" second");
         if (seconds != 1L) {
             builder.append("s");
@@ -1976,7 +2034,13 @@ public final class CVTrade extends JavaPlugin {
         }
     
         for (int checkSlot = 0; checkSlot < inventoryItems.length; checkSlot++) {
-            if (!inventoryItems[checkSlot].equals(tradeInventoryItems[checkSlot])) {
+            if (inventoryItems[checkSlot] == null) {
+                if (tradeInventoryItems[checkSlot] != null) {
+                    return false;
+                }
+            } else if (tradeInventoryItems[checkSlot] == null) {
+                return false;
+            } else if (!inventoryItems[checkSlot].equals(tradeInventoryItems[checkSlot])) {
                 return false;
             }
         }

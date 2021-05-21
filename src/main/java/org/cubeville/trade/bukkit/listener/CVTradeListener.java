@@ -22,14 +22,21 @@
 
 package org.cubeville.trade.bukkit.listener;
 
+import org.bukkit.Material;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.Chest;
 import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerCommandSendEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerKickEvent;
@@ -43,6 +50,52 @@ public final class CVTradeListener implements Listener {
     
     public CVTradeListener(@NotNull final CVTrade tradePlugin) {
         this.tradePlugin = tradePlugin;
+    }
+    
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onBlockBreak(final BlockBreakEvent event) {
+        
+        if (event.isCancelled()) {
+            return;
+        }
+        
+        final Block block = event.getBlock();
+        if (block.getType() == Material.AIR) {
+            return;
+        }
+        
+        final BlockState state = block.getState();
+        if (!(state instanceof Chest)) {
+            return;
+        }
+        
+        if (this.tradePlugin.blockBreak((Chest) state)) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage("§cYou may not break that chest: it is a TradeChest.");
+        }
+    }
+    
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onBlockPlace(final BlockPlaceEvent event) {
+        
+        if (event.isCancelled()) {
+            return;
+        }
+        
+        final Block block = event.getBlock();
+        if (block.getType() == Material.AIR) {
+            return;
+        }
+        
+        final BlockState state = block.getState();
+        if (!(state instanceof Chest)) {
+            return;
+        }
+        
+        if (this.tradePlugin.blockPlace((Chest) state)) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage("§cYou may not place that chest: the chest that would connect to it is a TradeChest, and they are not allowed to be double chests.");
+        }
     }
     
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -69,6 +122,11 @@ public final class CVTradeListener implements Listener {
         if (this.tradePlugin.inventoryClick(player, event.getInventory(), event.getSlot())) {
             event.setCancelled(true);
         }
+    }
+    
+    @EventHandler
+    public void onPlayerCommandSend(final PlayerCommandSendEvent event) {
+        event.getCommands().removeAll(this.tradePlugin.playerCommandSend(event.getPlayer()));
     }
     
     @EventHandler(priority = EventPriority.HIGHEST)

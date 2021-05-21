@@ -177,7 +177,7 @@ public final class CVTradeCommand implements TabExecutor {
                 return true;
             }
             
-            this.tradePlugin.unlinkChest(sender, name);
+            this.tradePlugin.unlinkChest(sender, name, true);
             return true;
         } else if (subCommand.equalsIgnoreCase("delete")) {
             if (!sender.hasPermission("cvtrade.delete")) {
@@ -197,8 +197,9 @@ public final class CVTradeCommand implements TabExecutor {
                 return true;
             }
             
-            this.tradePlugin.unlinkChest(sender, name);
-            this.tradePlugin.deleteChest(sender, name);
+            if (this.tradePlugin.unlinkChest(sender, name, false)) {
+                this.tradePlugin.deleteChest(sender, name);
+            }
             return true;
         } else if (subCommand.equalsIgnoreCase("list")) {
             if (!sender.hasPermission("cvtrade.list")) {
