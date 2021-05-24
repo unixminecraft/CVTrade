@@ -67,6 +67,10 @@ public final class CVTrade extends JavaPlugin {
     private BukkitScheduler scheduler;
     private CommandSender console;
     
+    private File serverStopFile;
+    private long serverStart;
+    private long serverStop;
+    
     private File tradeChestFolder;
     private ConcurrentHashMap<String, TradeChest> byName;
     private ConcurrentHashMap<Location, TradeChest> byLocation;
@@ -79,7 +83,7 @@ public final class CVTrade extends JavaPlugin {
     private File backupInventoryFolder;
     private ConcurrentHashMap<UUID, Inventory> tradeInventories;
     
-    private File offlineInventoryFolder;
+    private File offlineTraderFolder;
     private ConcurrentHashMap<UUID, OfflineTrader> offlineTraders;
     
     @Override
@@ -110,6 +114,34 @@ public final class CVTrade extends JavaPlugin {
         this.logger.log(Level.INFO, "// You should have received a copy of the GNU General Public License          //");
         this.logger.log(Level.INFO, "// along with this program.  If not, see <http://www.gnu.org/licenses/>.      //");
         this.logger.log(Level.INFO, "////////////////////////////////////////////////////////////////////////////////");
+        
+        // Server statistics //
+        
+        this.serverStart = System.currentTimeMillis();
+        
+        this.serverStopFile = new File(this.getDataFolder(), "server_stop.yml");
+        try {
+            if (!this.serverStopFile.exists()) {
+                if (!this.serverStopFile.createNewFile()) {
+                    throw new RuntimeException("Server Stop file not created at " + this.serverStopFile.getPath());
+                }
+            } else if (!this.serverStopFile.isFile()) {
+                throw new RuntimeException("Server Stop file is not a file. Location: " + this.serverStopFile.getPath());
+            }
+        } catch (SecurityException | IOException e) {
+            throw new RuntimeException("Unable to validate Server Stop file at " + this.serverStopFile.getPath(), e);
+        }
+        
+        final YamlConfiguration stopConfig = YamlConfiguration.loadConfiguration(this.serverStopFile);
+        if (!stopConfig.contains("server_stop_time")) {
+            this.serverStop = -1L;
+        } else {
+            this.serverStop = stopConfig.getLong("server_stop_time", -1L);
+        }
+        
+        if (this.serverStop == -1L) {
+            this.serverStop = this.serverStart - CVTrade.OFFLINE_TIMEOUT;
+        }
         
         // TradeChest Initialization //
         
@@ -285,23 +317,26 @@ public final class CVTrade extends JavaPlugin {
                 slot++;
             }
             
-            slot = 0;
+            final ItemStack[] backupItems = backupInventory.getStorageContents();
             final Inventory chestInventory = tradeChest.getChest().getInventory();
-            for (final ItemStack backupItem : backupInventory.getStorageContents()) {
-                if (backupItem == null && chestInventory.getStorageContents()[slot] == null) {
+            final ItemStack[] chestItems = chestInventory.getStorageContents();
+            
+            for (slot = 0; slot < backupItems.length; slot++) {
+                if (backupItems[slot] == null && chestItems[slot] == null) {
                     slot++;
-                } else if (backupItem == null) {
-                    chestInventory.setItem(slot, backupItem);
+                } else if (backupItems[slot] == null) {
+                    chestItems[slot] = backupItems[slot];
                     slot++;
                 } else if (chestInventory.getStorageContents()[slot] == null) {
-                    chestInventory.setItem(slot, backupItem);
+                    chestItems[slot] = backupItems[slot];
                     slot++;
-                } else if (!backupItem.equals(chestInventory.getStorageContents()[slot])) {
-                    chestInventory.setItem(slot, backupItem);
+                } else if (!backupItems[slot].equals(chestItems[slot])) {
+                    chestItems[slot] = backupItems[slot];
                     slot++;
                 }
-                
             }
+            
+            chestInventory.setStorageContents(chestItems);
         }
         
         this.tradeInventories = new ConcurrentHashMap<UUID, Inventory>();
@@ -314,21 +349,21 @@ public final class CVTrade extends JavaPlugin {
         // Offline Players Initialization //
         
         this.offlineTraders = new ConcurrentHashMap<UUID, OfflineTrader>();
-        this.offlineInventoryFolder = new File(this.getDataFolder(), "Offline_Inventories");
-        if (!this.offlineInventoryFolder.exists()) {
-            if (!this.offlineInventoryFolder.mkdirs()) {
-                throw new RuntimeException("OfflineInventory folder not created at " + this.offlineInventoryFolder.getPath());
+        this.offlineTraderFolder = new File(this.getDataFolder(), "Offline_Traders");
+        if (!this.offlineTraderFolder.exists()) {
+            if (!this.offlineTraderFolder.mkdirs()) {
+                throw new RuntimeException("OfflineTrader folder not created at " + this.offlineTraderFolder.getPath());
             }
-        } else if (!this.offlineInventoryFolder.isDirectory()) {
-            throw new RuntimeException("OfflineInventory folder is not a folder. Location: " + this.offlineInventoryFolder.getPath());
+        } else if (!this.offlineTraderFolder.isDirectory()) {
+            throw new RuntimeException("OfflineTrader folder is not a folder. Location: " + this.offlineTraderFolder.getPath());
         }
         
-        for (final File offlineInventoryFile : this.offlineInventoryFolder.listFiles()) {
+        for (final File offlineInventoryFile : this.offlineTraderFolder.listFiles()) {
             final YamlConfiguration config = YamlConfiguration.loadConfiguration(offlineInventoryFile);
             final UUID playerId = UUID.fromString(config.getString("uuid"));
             final String playerName = config.getString("name");
             final long logoutTime = config.getLong("logout_time");
-            final OfflineTrader.CompleteReason completeReason = config.getString("complete_reason") == null ? null : OfflineTrader.CompleteReason.valueOf(config.getString("reason"));
+            final OfflineTrader.CompleteReason completeReason = config.getString("complete_reason") == null ? null : OfflineTrader.CompleteReason.valueOf(config.getString("complete_reason"));
             final List<Map<String, Object>> items = config.getList("items") == null ? null : (List<Map<String, Object>>) config.getList("items");
             
             Inventory inventory = null;
@@ -365,7 +400,15 @@ public final class CVTrade extends JavaPlugin {
             
             for (final OfflineTrader offlineTrader : this.offlineTraders.values()) {
                 
-                if (offlineTrader.getLogoutTime() + CVTrade.OFFLINE_TIMEOUT >= System.currentTimeMillis() || offlineTrader.getCompleteReason() != null) {
+                final long now = System.currentTimeMillis();
+                if (offlineTrader.getCompleteReason() != null) {
+                    continue;
+                } else if (now - CVTrade.OFFLINE_TIMEOUT < this.serverStart) {
+                    final long diff = this.serverStop - offlineTrader.getLogoutTime();
+                    if (this.serverStart + (CVTrade.OFFLINE_TIMEOUT - diff) >= now) {
+                        continue;
+                    }
+                } else if (offlineTrader.getLogoutTime() + CVTrade.OFFLINE_TIMEOUT >= now) {
                     continue;
                 }
     
@@ -412,7 +455,14 @@ public final class CVTrade extends JavaPlugin {
                     
                     OfflineTrader otherOfflineTrader = this.offlineTraders.get(otherPlayerId);
                     if (otherOfflineTrader == null) {
-                        otherOfflineTrader = new OfflineTrader(otherPlayerId, otherTrade.getName(), System.currentTimeMillis() - CVTrade.OFFLINE_TIMEOUT);
+    
+                        final long offlineNow = System.currentTimeMillis();
+                        long logoutTime = offlineNow - CVTrade.OFFLINE_TIMEOUT;
+                        if (logoutTime < this.serverStart) {
+                            final long diff = offlineNow - this.serverStart;
+                            logoutTime = this.serverStop - (CVTrade.OFFLINE_TIMEOUT - diff);
+                        }
+                        otherOfflineTrader = new OfflineTrader(otherPlayerId, otherTrade.getName(), logoutTime);
                     }
                     
                     if (otherOfflineTrader.getCompleteReason() == null) {
@@ -429,6 +479,111 @@ public final class CVTrade extends JavaPlugin {
                 }
             }
         }, 10L * 20L, 10L * 20L);
+    }
+    
+    @Override
+    public void onDisable() {
+        
+        for (final Player player : this.getServer().getOnlinePlayers()) {
+            
+            final UUID playerId = player.getUniqueId();
+            final ActiveTrade activeTrade = this.activeTrades.get(playerId);
+            if (activeTrade == null) {
+                continue;
+            }
+            
+            final OfflineTrader offlineTrader = new OfflineTrader(player);
+            this.offlineTraders.put(playerId, offlineTrader);
+    
+            final String playerName = offlineTrader.getName();
+            final long logoutTime = offlineTrader.getLogoutTime();
+            final OfflineTrader.CompleteReason completeReason = offlineTrader.getCompleteReason();
+            final Inventory inventory = offlineTrader.getInventory();
+    
+            final List<Map<String, Object>> items;
+            if (inventory == null) {
+                items = null;
+            } else {
+                items = new ArrayList<Map<String, Object>>();
+                for (final ItemStack item : inventory.getStorageContents()) {
+                    items.add(item == null ? null : item.serialize());
+                }
+            }
+    
+            final File offlineTraderFile = new File(this.offlineTraderFolder, playerId.toString() + ".yml");
+            try {
+                if (!offlineTraderFile.exists()) {
+                    if (!offlineTraderFile.createNewFile()) {
+                        this.console.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
+                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
+                        this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
+                        this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
+                        this.logger.log(Level.WARNING, "name:" + playerName);
+                        this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
+                        this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
+                        this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
+                        this.logger.log(Level.WARNING, "ISSUE:");
+                        this.logger.log(Level.WARNING, "OfflineTrader file not created successfully.");
+                        return;
+                    }
+                }
+            } catch (SecurityException | IOException e) {
+                this.console.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
+                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
+                this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
+                this.logger.log(Level.WARNING, "name:" + playerName);
+                this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
+                this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
+                this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to create OfflineTrader file.");
+                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                return;
+            }
+    
+            final YamlConfiguration config = new YamlConfiguration();
+            config.set("uuid", playerId.toString());
+            config.set("name", playerName);
+            config.set("logout_time", logoutTime);
+            config.set("complete_reason", completeReason == null ? null : completeReason.name());
+            config.set("items", items);
+            try {
+                config.save(offlineTraderFile);
+            } catch (IOException | IllegalArgumentException e) {
+                this.console.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
+                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                this.logger.log(Level.WARNING, "Details below:");
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
+                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
+                this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
+                this.logger.log(Level.WARNING, "name:" + playerName);
+                this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
+                this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
+                this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
+                this.logger.log(Level.WARNING, "ISSUE:");
+                this.logger.log(Level.WARNING, "Unable to save OfflineTrader configuration file.");
+                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+            }
+        }
+        
+        this.serverStop = System.currentTimeMillis();
+        final YamlConfiguration stopConfig = new YamlConfiguration();
+        stopConfig.set("server_stop_time", this.serverStop);
+        try {
+            stopConfig.save(this.serverStopFile);
+        } catch (IOException | IllegalArgumentException e) {
+            this.logger.log(Level.WARNING, "ISSUE WHILE SAVING SERVER STOP TIME.");
+            this.logger.log(Level.WARNING, "Details below:");
+            this.logger.log(Level.WARNING, "server_stop_time:" + this.serverStop);
+            this.logger.log(Level.WARNING, "ISSUE:");
+            this.logger.log(Level.WARNING, "Attempted to save the Server Stop file.");
+            this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+        }
     }
     
     ///////////////////////////
@@ -789,7 +944,14 @@ public final class CVTrade extends JavaPlugin {
                 this.deleteChestInventory(player, tradeChest);
                 player.sendMessage("§cYour trade has been automatically cancelled. Any items you put in the chest have been automatically returned to you.");
                 
-                otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), System.currentTimeMillis() - CVTrade.OFFLINE_TIMEOUT);
+                final long now = System.currentTimeMillis();
+                long logoutTime = now - CVTrade.OFFLINE_TIMEOUT;
+                if (logoutTime < this.serverStart) {
+                    final long diff = now - this.serverStart;
+                    logoutTime = this.serverStop - (CVTrade.OFFLINE_TIMEOUT - diff);
+                }
+                
+                otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), logoutTime);
                 otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
                 otherOfflineTrader.setInventory(linkedChest.getChest().getInventory());
                 this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
@@ -1421,7 +1583,14 @@ public final class CVTrade extends JavaPlugin {
             this.itemTransfer(player, tradeChest.getChest().getInventory());
             player.sendMessage("§cYour trade has been automatically cancelled. Any items you put in the chest have been automatically returned to you.");
     
-            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), System.currentTimeMillis() - CVTrade.OFFLINE_TIMEOUT);
+            final long now = System.currentTimeMillis();
+            long logoutTime = now - CVTrade.OFFLINE_TIMEOUT;
+            if (logoutTime < this.serverStart) {
+                final long diff = now - this.serverStart;
+                logoutTime = this.serverStop - (CVTrade.OFFLINE_TIMEOUT - diff);
+            }
+            
+            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), logoutTime);
             otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
             otherOfflineTrader.setInventory(linkedChest.getChest().getInventory());
             this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
@@ -1544,7 +1713,14 @@ public final class CVTrade extends JavaPlugin {
             this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to cancel a trade.");
             this.logger.log(Level.WARNING, "Other player is not online, has an ActiveTrade, but does not have an OfflineTrader object.");
     
-            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), System.currentTimeMillis() - CVTrade.OFFLINE_TIMEOUT);
+            final long now = System.currentTimeMillis();
+            long logoutTime = now - CVTrade.OFFLINE_TIMEOUT;
+            if (logoutTime < this.serverStart) {
+                final long diff = now - this.serverStart;
+                logoutTime = this.serverStop - (CVTrade.OFFLINE_TIMEOUT - diff);
+            }
+            
+            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), logoutTime);
             otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
         } else {
             otherOfflineTrader.setCompleteReason(cancel ? OfflineTrader.CompleteReason.CANCELLED : OfflineTrader.CompleteReason.REJECTED);
@@ -1873,7 +2049,14 @@ public final class CVTrade extends JavaPlugin {
             this.deleteChestInventory(player, tradeChest);
             player.sendMessage("§cYour trade has been automatically cancelled. Any items you put in the chest have been automatically returned to you.");
     
-            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), System.currentTimeMillis() - CVTrade.OFFLINE_TIMEOUT);
+            final long now = System.currentTimeMillis();
+            long logoutTime = now - CVTrade.OFFLINE_TIMEOUT;
+            if (logoutTime < this.serverStart) {
+                final long diff = now - this.serverStart;
+                logoutTime = this.serverStop - (CVTrade.OFFLINE_TIMEOUT - diff);
+            }
+            
+            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName(), logoutTime);
             otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
             otherOfflineTrader.setInventory(linkedChest.getChest().getInventory());
             this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
@@ -2362,14 +2545,14 @@ public final class CVTrade extends JavaPlugin {
                 }
             }
             
-            final File offlineInventoryFile = new File(this.offlineInventoryFolder, playerId.toString() + ".yml");
+            final File offlineTraderFile = new File(this.offlineTraderFolder, playerId.toString() + ".yml");
             try {
-                if (!offlineInventoryFile.exists()) {
-                    if (!offlineInventoryFile.createNewFile()) {
+                if (!offlineTraderFile.exists()) {
+                    if (!offlineTraderFile.createNewFile()) {
                         sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
                         this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
                         this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
                         this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
                         this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
                         this.logger.log(Level.WARNING, "name:" + playerName);
@@ -2385,7 +2568,7 @@ public final class CVTrade extends JavaPlugin {
                 sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
                 this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
                 this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
                 this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
                 this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
                 this.logger.log(Level.WARNING, "name:" + playerName);
@@ -2405,12 +2588,12 @@ public final class CVTrade extends JavaPlugin {
             config.set("complete_reason", completeReason == null ? null : completeReason.name());
             config.set("items", items);
             try {
-                config.save(offlineInventoryFile);
+                config.save(offlineTraderFile);
             } catch (IOException | IllegalArgumentException e) {
                 sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
                 this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
                 this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
                 this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
                 this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
                 this.logger.log(Level.WARNING, "name:" + playerName);
@@ -2517,14 +2700,14 @@ public final class CVTrade extends JavaPlugin {
         this.scheduler.runTaskAsynchronously(this, () -> {
             
             final UUID playerId = offlineTrader.getUniqueId();
-            final File offlineInventoryFile = new File(this.offlineInventoryFolder, playerId.toString() + ".yml");
+            final File offlineTraderFile = new File(this.offlineTraderFolder, playerId.toString() + ".yml");
             try {
-                if (offlineInventoryFile.exists()) {
-                    if (!offlineInventoryFile.delete()) {
+                if (offlineTraderFile.exists()) {
+                    if (!offlineTraderFile.delete()) {
                         sender.sendMessage("§cThere was an error while returning your items. Please report this to a server administrator.");
                         this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
                         this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
                         this.logger.log(Level.WARNING, "ISSUE:");
                         this.logger.log(Level.WARNING, "OfflineTrader file not deleted successfully.");
                     }
@@ -2533,7 +2716,7 @@ public final class CVTrade extends JavaPlugin {
                 sender.sendMessage("§cThere was an error while returning your items. Please report this to a server administrator.");
                 this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
                 this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineInventoryFile.getPath());
+                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
                 this.logger.log(Level.WARNING, "ISSUE:");
                 this.logger.log(Level.WARNING, "Unable to delete OfflineTrader file.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
