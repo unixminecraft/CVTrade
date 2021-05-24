@@ -1192,13 +1192,21 @@ public final class CVTrade extends JavaPlugin {
                 }
             }
             
+            if (builder.toString().isEmpty()) {
+                builder.append("§cNone");
+            }
+            
             player.sendMessage(builder.toString());
             player.sendMessage("§8================================");
             return;
         }
         
-        for (final TradeChest tradeChest : this.byName.values()) {
-            player.sendMessage(" §f-§r §a" + tradeChest.getName());
+        if (this.byName.values().isEmpty()) {
+            player.sendMessage("§cNone");
+        } else {
+            for (final TradeChest tradeChest : this.byName.values()) {
+                player.sendMessage(" §f-§r §a" + tradeChest.getName());
+            }
         }
     
         player.sendMessage("§8================================");
@@ -1258,20 +1266,61 @@ public final class CVTrade extends JavaPlugin {
         }
         
         final Location location = tradeChest.getChest().getLocation();
+        ActiveTrade activeTrade = null;
+        for (final ActiveTrade checkTrade : this.activeTrades.values()) {
+            if (checkTrade.getTradeChest().equals(tradeChest)) {
+                activeTrade = checkTrade;
+                break;
+            }
+        }
+    
         final TradeChest linkedChest = this.pairings.get(tradeChest);
+        ActiveTrade linkedTrade = null;
+        if (linkedChest != null) {
+            for (final ActiveTrade checkTrade : this.activeTrades.values()) {
+                if (checkTrade.getTradeChest().equals(linkedChest)) {
+                    linkedTrade = checkTrade;
+                    break;
+                }
+            }
+        }
         
         sender.sendMessage("§8================================");
+        
         sender.sendMessage("§fName:§r §6" + tradeChest.getName());
+        
         sender.sendMessage("§8--------------------------------");
+        
         sender.sendMessage("§fWorld:§r §b" + location.getWorld().getName());
         sender.sendMessage("§fX-Coord:§r §b" + location.getBlockX());
         sender.sendMessage("§fY-Coord:§r §b" + location.getBlockY());
         sender.sendMessage("§fZ-Coord:§r §b" + location.getBlockZ());
-        sender.sendMessage("§8--------------------------------");
-        sender.sendMessage("§fIs Linked:§r §" + (linkedChest == null ? "cNo" : "aYes"));
         
+        sender.sendMessage("§8--------------------------------");
+        
+        sender.sendMessage("§fIs Linked:§r §" + (linkedChest == null ? "cNo" : "aYes"));
         if (linkedChest != null) {
             sender.sendMessage("§fLinked Chest:§r §b" + linkedChest.getName());
+        }
+    
+        sender.sendMessage("§8--------------------------------");
+        
+        sender.sendMessage("§fIs in Active Trade:§r §" + (activeTrade == null ? "cNo" : "aYes"));
+        if (activeTrade != null) {
+            sender.sendMessage("§fPlayer Name:§r §b" + activeTrade.getName());
+            sender.sendMessage("§fPlayer UUID:§r §b" + activeTrade.getUniqueId().toString());
+            sender.sendMessage("§fTrade Status:§r §b" + activeTrade.getTradeStatus().name());
+        }
+    
+        sender.sendMessage("§8--------------------------------");
+        
+        if (linkedChest != null) {
+            sender.sendMessage("§fLinked TradeChest is in Active Trade:§r §" + (linkedTrade == null ? "cNo" : "aYes"));
+            if (linkedTrade != null) {
+                sender.sendMessage("§fLinked Player Name:§r §b" + linkedTrade.getName());
+                sender.sendMessage("§fLinked Player UUID:§r §b" + linkedTrade.getUniqueId().toString());
+                sender.sendMessage("§fLinked Trade Status:§r §b" + linkedTrade.getTradeStatus().name());
+            }
         }
     
         sender.sendMessage("§8================================");
