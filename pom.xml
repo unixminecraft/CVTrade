@@ -30,7 +30,7 @@
     <artifactId>CVTrade</artifactId>
     <packaging>jar</packaging>
     <version>1.0.0</version>
-    <name>CVReturn</name>
+    <name>CVTrade</name>
 
     <repositories>
         <repository>

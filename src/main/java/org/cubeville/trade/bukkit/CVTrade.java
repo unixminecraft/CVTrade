@@ -115,6 +115,20 @@ public final class CVTrade extends JavaPlugin {
         this.logger.log(Level.INFO, "// along with this program.  If not, see <http://www.gnu.org/licenses/>.      //");
         this.logger.log(Level.INFO, "////////////////////////////////////////////////////////////////////////////////");
         
+        // Plugin Data Folder Initialization //
+        final File dataFolder = this.getDataFolder();
+        try {
+            if (!dataFolder.exists()) {
+                if (!dataFolder.mkdirs()) {
+                    throw new RuntimeException("Plugin data folder not created at " + dataFolder.getPath());
+                }
+            } else if (!dataFolder.isDirectory()) {
+                throw new RuntimeException("Plugin data folder is not a directory. Location: " + dataFolder.getPath());
+            }
+        } catch (SecurityException e) {
+            throw new RuntimeException("Unable to validate Plugin data folder at " + dataFolder.getPath(), e);
+        }
+        
         // Server statistics //
         
         this.serverStart = System.currentTimeMillis();
