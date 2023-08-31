@@ -1,24 +1,24 @@
-////////////////////////////////////////////////////////////////////////////////
-// This file is part of CVTrade.                                              //
-//                                                                            //
-// CVTrade Bukkit plugin for Minecraft Bukkit servers.                        //
-//                                                                            //
-// Copyright (C) 2021 Matt Ciolkosz (https://github.com/mciolkosz/)           //
-// Copyright (C) 2021 Cubeville (https://www.cubeville.org/)                  //
-//                                                                            //
-// This program is free software: you can redistribute it and/or modify       //
-// it under the terms of the GNU General Public License as published by       //
-// the Free Software Foundation, either version 3 of the License, or          //
-// (at your option) any later version.                                        //
-//                                                                            //
-// This program is distributed in the hope that it will be useful,            //
-// but WITHOUT ANY WARRANTY; without even the implied warranty of             //
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the              //
-// GNU General Public License for more details.                               //
-//                                                                            //
-// You should have received a copy of the GNU General Public License          //
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.      //
-////////////////////////////////////////////////////////////////////////////////
+/* 
+ * This file is part of CVTrade.
+ * 
+ * CVTrade Bukkit plugin for Minecraft Bukkit servers.
+ * 
+ * Copyright (C) 2021-2023 Matt Ciolkosz (https://github.com/mciolkosz/)
+ * Copyright (C) 2021-2023 Cubeville (https://www.cubeville.org/)
+ * 
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
 
 package org.cubeville.trade.bukkit.listener;
 
@@ -41,15 +41,15 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
-import org.cubeville.trade.bukkit.CVTrade;
+import org.cubeville.trade.bukkit.TradePlugin;
 import org.jetbrains.annotations.NotNull;
 
-public final class CVTradeListener implements Listener {
+public final class TradeListener implements Listener {
     
-    private final CVTrade tradePlugin;
+    private final TradePlugin plugin;
     
-    public CVTradeListener(@NotNull final CVTrade tradePlugin) {
-        this.tradePlugin = tradePlugin;
+    public TradeListener(@NotNull final TradePlugin plugin) {
+        this.plugin = plugin;
     }
     
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -59,19 +59,9 @@ public final class CVTradeListener implements Listener {
             return;
         }
         
-        final Block block = event.getBlock();
-        if (block.getType() == Material.AIR) {
-            return;
-        }
-        
-        final BlockState state = block.getState();
-        if (!(state instanceof Chest)) {
-            return;
-        }
-        
-        if (this.tradePlugin.blockBreak((Chest) state)) {
+        if (this.plugin.blockBreak(event.getBlock().getState().getLocation())) {
             event.setCancelled(true);
-            event.getPlayer().sendMessage("§cYou may not break that chest: it is a TradeChest.");
+            event.getPlayer().sendMessage("§cYou may not break that item: it is part of a trade room.");
         }
     }
     
@@ -92,9 +82,9 @@ public final class CVTradeListener implements Listener {
             return;
         }
         
-        if (this.tradePlugin.blockPlace((Chest) state)) {
+        if (this.plugin.blockPlace((Chest) state)) {
             event.setCancelled(true);
-            event.getPlayer().sendMessage("§cYou may not place that chest: the chest that would connect to it is a TradeChest, and they are not allowed to be double chests.");
+            event.getPlayer().sendMessage("§cYou may not place that chest: the chest that would connect to it is a trade chest, and they are not allowed to be double chests.");
         }
     }
     
@@ -119,14 +109,14 @@ public final class CVTradeListener implements Listener {
             return;
         }
         
-        if (this.tradePlugin.inventoryClick(player, event.getInventory(), event.getSlot())) {
+        if (this.plugin.inventoryClick(player, event.getInventory(), event.getSlot())) {
             event.setCancelled(true);
         }
     }
     
     @EventHandler
     public void onPlayerCommandSend(final PlayerCommandSendEvent event) {
-        event.getCommands().removeAll(this.tradePlugin.playerCommandSend(event.getPlayer()));
+        event.getCommands().removeAll(this.plugin.playerCommandSend(event.getPlayer()));
     }
     
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -140,15 +130,15 @@ public final class CVTradeListener implements Listener {
                 if (event.getClickedBlock() == null) {
                     return;
                 }
-    
-                this.tradePlugin.performCreate(event.getPlayer(), event.getClickedBlock());
+                
+                this.plugin.buildRoom(event.getPlayer(), event.getClickedBlock().getState());
                 break;
             case RIGHT_CLICK_BLOCK:
                 if (event.getClickedBlock() == null) {
                     return;
                 }
                 
-                if (this.tradePlugin.rightClickedBlock(event.getPlayer(), event.getClickedBlock())) {
+                if (this.plugin.rightClickedBlock(event.getPlayer(), event.getClickedBlock().getState())) {
                     event.setCancelled(true);
                 }
                 break;
@@ -159,16 +149,16 @@ public final class CVTradeListener implements Listener {
     
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerJoin(final PlayerJoinEvent event) {
-        this.tradePlugin.playerJoin(event.getPlayer());
+        this.plugin.playerJoin(event.getPlayer());
     }
     
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerKick(final PlayerKickEvent event) {
-        this.tradePlugin.playerLeave(event.getPlayer());
+        this.plugin.playerLeave(event.getPlayer());
     }
     
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerQuit(final PlayerQuitEvent event) {
-        this.tradePlugin.playerLeave(event.getPlayer());
+        this.plugin.playerLeave(event.getPlayer());
     }
 }

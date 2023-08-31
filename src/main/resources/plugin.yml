@@ -1,41 +1,17 @@
 name: CVTrade
-main: org.cubeville.trade.bukkit.CVTrade
-version: 1.0.0
+main: org.cubeville.trade.bukkit.TradePlugin
+version: 1.1.0
 author: mciolkosz
-api-version: 1.16
+api-version: "1.20"
+depend: [WorldEdit,WorldGuard]
+softdepend: [Multiverse-Core]
 
 commands:
-  cvtrade:
-    description: Base commmand for all CVTrade commands.
-    permission: cvtrade.cvtrade
-    permission-messag: "§cNo permission."
-    usage: "§cSyntax: /cvtrade <subcommmand>"
+  tradeadmin:
+    description: Administrative command
+    permission: cvtrade.tradeadmin
 
-permission:
-  cvtrade.cvtrade:
-    description: Ability to use the /cvtrade base command.
-    default: op
-  cvtrade.create:
-    description: Ability to create TradeChests.
-    default: op
-  cvtrade.link:
-    description: Ability to link TradeChests.
-    default: op
-  cvtrade.unlink:
-    description: Ability to unlink TradeChests.
-    default: op
-  cvtrade.delete:
-    description: Ability to remove TradeChests.
-    default: op
-  cvtrade.list:
-    description: Ability to list all TradeChests.
-    default: op
-  cvtrade.find:
-    description: Ability to find any TradeChests nearby.
-    default: op
-  cvtrade.info:
-    description: Ability to see detailed information about a TradeChest.
-    default: op
-  cvtrade.trade:
-    description: Ability to perform a trade (start, cancel, complete, etc).
+permissions:
+  cvtrade.tradeadmin:
+    description: Ability to use the /tradeadmin command
     default: op
