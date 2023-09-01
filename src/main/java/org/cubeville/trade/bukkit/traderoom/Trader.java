@@ -25,21 +25,23 @@ package org.cubeville.trade.bukkit.traderoom;
 import java.util.UUID;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 public final class Trader {
     
     private final UUID uniqueId;
     private final String name;
-    private final TradeStatus status;
+    
+    private long logoutTime;
     
     public Trader(@NotNull final Player player) {
-        this(player.getUniqueId(), player.getName(), TradeStatus.PREPARE);
+        this(player.getUniqueId(), player.getName(), 0L);
     }
     
-    public Trader(@NotNull final UUID uniqueId, @NotNull final String name, @NotNull final TradeStatus status) {
+    public Trader(@NotNull final UUID uniqueId, @NotNull final String name, final long logoutTime) {
         this.uniqueId = uniqueId;
         this.name = name;
-        this.status = status;
+        this.logoutTime = logoutTime;
     }
     
     @NotNull
@@ -52,8 +54,44 @@ public final class Trader {
         return this.name;
     }
     
-    @NotNull
-    public TradeStatus getStatus() {
-        return this.status;
+    public long getLogoutTime() {
+        return this.logoutTime;
+    }
+    
+    public void setLogoutTime(final long logoutTime) {
+        this.logoutTime = Math.max(logoutTime, 0L);
+    }
+    
+    public boolean isOffline() {
+        return this.logoutTime != 0L;
+    }
+    
+    public void setOffline(final boolean offline) {
+        this.setLogoutTime(offline ? System.currentTimeMillis() : 0L);
+    }
+    
+    @Override
+    public boolean equals(@Nullable final Object object) {
+        
+        if (object == this) {
+            return true;
+        }
+        
+        if (object == null) {
+            return false;
+        }
+        if (!(object instanceof Trader)) {
+            return false;
+        }
+        
+        final Trader other = (Trader) object;
+        
+        if (!this.getUniqueId().equals(other.getUniqueId())) {
+            return false;
+        }
+        if (!this.getName().equalsIgnoreCase(other.getName())) {
+            return false;
+        }
+        return this.getLogoutTime() == other.getLogoutTime();
     }
 }

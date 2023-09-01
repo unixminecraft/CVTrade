@@ -62,6 +62,6 @@ public enum BuildStep {
         if (this == COMPLETED) {
             return this;
         }
-        return ORDERED.get(this.ordinal());
+        return ORDERED.get(this.ordinal() + 1);
     }
 }

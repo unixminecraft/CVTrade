@@ -149,16 +149,16 @@ public final class TradeListener implements Listener {
     
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerJoin(final PlayerJoinEvent event) {
-        this.plugin.playerJoin(event.getPlayer());
+        this.plugin.playerJoin(event.getPlayer().getUniqueId());
     }
     
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerKick(final PlayerKickEvent event) {
-        this.plugin.playerLeave(event.getPlayer());
+        this.plugin.playerLeave(event.getPlayer().getUniqueId());
     }
     
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerQuit(final PlayerQuitEvent event) {
-        this.plugin.playerLeave(event.getPlayer());
+        this.plugin.playerLeave(event.getPlayer().getUniqueId());
     }
 }

@@ -26,8 +26,12 @@ import com.sk89q.worldedit.bukkit.BukkitAdapter;
 import com.sk89q.worldguard.WorldGuard;
 import com.sk89q.worldguard.protection.managers.RegionManager;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.Server;
 import org.bukkit.World;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
@@ -36,6 +40,10 @@ import org.bukkit.configuration.Configuration;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.util.Vector;
 import org.cubeville.trade.bukkit.TradePlugin;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -45,6 +53,7 @@ public final class TradeRoom {
     private static final String KEY_NAME = "name";
     
     private static final String KEY_CHEST_1 = "chest_1";
+    private static final String KEY_ITEMS_1 = "items_1";
     private static final String KEY_REGION_1 = "region_1";
     private static final String KEY_TELEPORT_IN_1 = "teleport_in_1";
     private static final String KEY_TELEPORT_OUT_1 = "teleport_out_1";
@@ -55,6 +64,7 @@ public final class TradeRoom {
     private static final String KEY_BUTTON_DENY_1 = "button_deny_1";
     
     private static final String KEY_CHEST_2 = "chest_2";
+    private static final String KEY_ITEMS_2 = "items_2";
     private static final String KEY_REGION_2 = "region_2";
     private static final String KEY_TELEPORT_IN_2 = "teleport_in_2";
     private static final String KEY_TELEPORT_OUT_2 = "teleport_out_2";
@@ -63,6 +73,16 @@ public final class TradeRoom {
     private static final String KEY_BUTTON_LOCK_2 = "button_lock_2";
     private static final String KEY_BUTTON_ACCEPT_2 = "button_accept_2";
     private static final String KEY_BUTTON_DENY_2 = "button_deny_2";
+    
+    private static final String KEY_TRADE_STATUS = "trade_status";
+    
+    private static final String KEY_TRADER_1_UUID = "trader_1_uuid";
+    private static final String KEY_TRADER_1_NAME = "trader_1_name";
+    private static final String KEY_TRADER_1_LOGOUT_TIME = "trader_1_logout_time";
+    
+    private static final String KEY_TRADER_2_UUID = "trader_2_uuid";
+    private static final String KEY_TRADER_2_NAME = "trader_2_name";
+    private static final String KEY_TRADER_2_LOGOUT_TIME = "trader_2_logout_time";
     
     private final String name;
     
@@ -86,16 +106,9 @@ public final class TradeRoom {
     private final Button buttonAccept2;
     private final Button buttonDeny2;
     
+    private TradeStatus status;
     private Trader trader1;
     private Trader trader2;
-    
-    private UUID uniqueId1;
-    private String name1;
-    private TradeStatus status1;
-    
-    private UUID uniqueId2;
-    private String name2;
-    private TradeStatus status2;
     
     @NotNull
     public static TradeRoomBuilder newBuilder(@NotNull final TradePlugin plugin, @NotNull final Player player) {
@@ -145,9 +158,13 @@ public final class TradeRoom {
         this.buttonLock2 = buttonLock2;
         this.buttonAccept2 = buttonAccept2;
         this.buttonDeny2 = buttonDeny2;
+        
+        this.status = null;
+        this.trader1 = null;
+        this.trader2 = null;
     }
     
-    public TradeRoom(@NotNull final Configuration config) throws IllegalArgumentException {
+    public TradeRoom(@NotNull final Server server, @NotNull final Configuration config) throws IllegalArgumentException {
         
         final String nameRaw = config.getString(KEY_NAME, null);
         final String name = nameRaw == null ? null : nameRaw.trim().toLowerCase();
@@ -260,6 +277,95 @@ public final class TradeRoom {
         this.assertDifferent(buttonLock2, "button lock 2", buttonDeny2, "button deny 2");
         this.assertDifferent(buttonAccept2, "button accept 2", buttonDeny2, "button deny 2");
         
+        final String rawStatus = config.getString(KEY_TRADE_STATUS, null);
+        final TradeStatus status;
+        if (rawStatus == null) {
+            status = null;
+        } else {
+            try {
+                status = TradeStatus.valueOf(rawStatus.trim().toUpperCase());
+            } catch (final IllegalArgumentException e) {
+                throw new IllegalArgumentException("Trade status " + rawStatus.trim() + " is not a valid trade status.", e);
+            }
+        }
+        
+        final String trader1UUID = config.getString(KEY_TRADER_1_UUID, null);
+        final UUID trader1UniqueId;
+        if (trader1UUID == null) {
+            trader1UniqueId = null;
+        } else {
+            try {
+                trader1UniqueId = UUID.fromString(trader1UUID);
+            } catch (final IllegalArgumentException e) {
+                throw new IllegalArgumentException("Unable to parse UUID " + trader1UUID + " for trader 1.", e);
+            }
+        }
+        
+        final String trader1Name = config.getString(KEY_TRADER_1_NAME, null);
+        if (trader1Name != null && trader1Name.trim().isEmpty()) {
+            throw new IllegalArgumentException("Cannot have blank name for trader 1.");
+        }
+        
+        final long trader1LogoutTime;
+        if (config.isSet(KEY_TRADER_1_LOGOUT_TIME)) {
+            trader1LogoutTime = config.getLong(KEY_TRADER_1_LOGOUT_TIME, -1L);
+        } else {
+            trader1LogoutTime = 0L;
+        }
+        if (trader1LogoutTime < 0L) {
+            throw new IllegalArgumentException("Cannot have invalid logout time for trader 1.");
+        }
+        
+        final Trader trader1;
+        if (trader1UniqueId != null && trader1Name != null) {
+            trader1 = new Trader(trader1UniqueId, trader1Name.trim(), trader1LogoutTime);
+        } else {
+            trader1 = null;
+        }
+        
+        final String trader2UUID = config.getString(KEY_TRADER_2_UUID, null);
+        final UUID trader2UniqueId;
+        if (trader2UUID == null) {
+            trader2UniqueId = null;
+        } else {
+            try {
+                trader2UniqueId = UUID.fromString(trader2UUID);
+            } catch (final IllegalArgumentException e) {
+                throw new IllegalArgumentException("Unable to parse UUID " + trader2UUID + " for trader 2.", e);
+            }
+        }
+        
+        final String trader2Name = config.getString(KEY_TRADER_2_NAME, null);
+        if (trader2Name != null && trader2Name.trim().isEmpty()) {
+            throw new IllegalArgumentException("Cannot have blank name for trader 2.");
+        }
+        
+        final long trader2LogoutTime;
+        if (config.isSet(KEY_TRADER_2_LOGOUT_TIME)) {
+            trader2LogoutTime = config.getLong(KEY_TRADER_2_LOGOUT_TIME, -1L);
+        } else {
+            trader2LogoutTime = 0L;
+        }
+        if (trader2LogoutTime < 0L) {
+            throw new IllegalArgumentException("Cannot have invalid logout time for trader 2.");
+        }
+        
+        final Trader trader2;
+        if (trader2UniqueId != null && trader2Name != null) {
+            trader2 = new Trader(trader2UniqueId, trader2Name.trim(), trader2LogoutTime);
+        } else {
+            trader2 = null;
+        }
+        
+        final List<?> rawItems1 = config.getList(KEY_ITEMS_1, null);
+        if (rawItems1 != null) {
+            this.backupInventory(server, rawItems1, chest1);
+        }
+        final List<?> rawItems2 = config.getList(KEY_ITEMS_2, null);
+        if (rawItems2 != null) {
+            this.backupInventory(server, rawItems2, chest2);
+        }
+        
         this.name = name;
         
         this.chest1 = chest1;
@@ -281,6 +387,10 @@ public final class TradeRoom {
         this.buttonLock2 = buttonLock2;
         this.buttonAccept2 = buttonAccept2;
         this.buttonDeny2 = buttonDeny2;
+        
+        this.status = status;
+        this.trader1 = trader1;
+        this.trader2 = trader2;
     }
     
     @NotNull
@@ -372,6 +482,35 @@ public final class TradeRoom {
         if (existing.equals(inbound)) {
             throw new IllegalArgumentException("The location for the " + inboundType + " is already in use for the " + existingType + ".");
         }
+    }
+    
+    private void backupInventory(@NotNull final Server server, @NotNull final List<?> rawItems, @NotNull final Chest chest) {
+        
+        final Inventory backupInventory = server.createInventory(null, 27);
+        final Inventory chestInventory = chest.getInventory();
+        final List<Map<String, Object>> items = (List<Map<String, Object>>) rawItems;
+        
+        int slot = 0;
+        for (final Map<String, Object> item : items) {
+            backupInventory.setItem(slot, item == null ? null : ItemStack.deserialize(item));
+        }
+        
+        final ItemStack[] backupItems = backupInventory.getStorageContents();
+        final ItemStack[] chestItems = chestInventory.getStorageContents();
+        
+        for (slot = 0; slot < backupItems.length; slot++) {
+            if (backupItems[slot] == null && chestItems[slot] == null) {
+                // Do nothing.
+            } else if (backupItems[slot] == null) {
+                chestItems[slot] = backupItems[slot];
+            } else if (chestItems[slot] == null) {
+                chestItems[slot] = backupItems[slot];
+            } else if (!backupItems[slot].equals(chestItems[slot])) {
+                chestItems[slot] = backupItems[slot];
+            }
+        }
+        
+        chestInventory.setStorageContents(chestItems);
     }
     
     @NotNull
@@ -469,6 +608,45 @@ public final class TradeRoom {
         return this.buttonDeny2.getLocation();
     }
     
+    @Nullable
+    public TradeStatus getStatus() {
+        return this.status;
+    }
+    
+    public void setStatus(@Nullable final TradeStatus status) {
+        this.status = status;
+    }
+    
+    @Nullable
+    public Trader getTrader1() {
+        return this.trader1;
+    }
+    
+    public void setTrader1(@Nullable final Trader trader1) {
+        this.trader1 = trader1;
+    }
+    
+    @Nullable
+    public Trader getTrader2() {
+        return this.trader2;
+    }
+    
+    public void setTrader2(@Nullable final Trader trader2) {
+        this.trader2 = trader2;
+    }
+    
+    @Nullable
+    public Trader getTrader(@NotNull final UUID uniqueId) {
+        
+        if (this.isTrader1(uniqueId)) {
+            return this.getTrader1();
+        } else if (this.isTrader2(uniqueId)) {
+            return this.getTrader2();
+        } else {
+            return null;
+        }
+    }
+    
     @NotNull
     public FileConfiguration getConfig() {
         
@@ -494,11 +672,25 @@ public final class TradeRoom {
         config.set(KEY_BUTTON_ACCEPT_2, this.getButtonAccept2());
         config.set(KEY_BUTTON_DENY_2, this.getButtonDeny2());
         
+        if (this.getStatus() != null) {
+            config.set(KEY_TRADE_STATUS, this.getStatus().name());
+        }
+        if (this.getTrader1() != null) {
+            config.set(KEY_TRADER_1_UUID, this.getTrader1().getUniqueId().toString());
+            config.set(KEY_TRADER_1_NAME, this.getTrader1().getName());
+            config.set(KEY_TRADER_1_LOGOUT_TIME, this.getTrader1().getLogoutTime());
+        }
+        if (this.getTrader2() != null) {
+            config.set(KEY_TRADER_2_UUID, this.getTrader2().getUniqueId().toString());
+            config.set(KEY_TRADER_2_NAME, this.getTrader2().getName());
+            config.set(KEY_TRADER_2_LOGOUT_TIME, this.getTrader2().getLogoutTime());
+        }
+        
         return config;
     }
     
-    public boolean contains(@NotNull final Location location) {
-        return this.containsChest(location) || this.containsButton(location);
+    public boolean contains(@NotNull final Location location, final boolean exact) {
+        return this.containsChest(location) || this.containsButton(location, exact);
     }
     
     @Nullable
@@ -508,10 +700,10 @@ public final class TradeRoom {
         if (side != null) {
             return side;
         }
-        return this.getButtonSide(location);
+        return this.getButtonSide(location, true);
     }
     
-    public boolean containsChest(@NotNull final Location location) {
+    private boolean containsChest(@NotNull final Location location) {
         return this.getChestSide(location) != null;
     }
     
@@ -527,32 +719,32 @@ public final class TradeRoom {
         }
     }
     
-    public boolean containsButton(@NotNull final Location location) {
-        return this.getButtonSide(location) != null;
+    private boolean containsButton(@NotNull final Location location, final boolean exact) {
+        return this.getButtonSide(location, exact) != null;
     }
     
     @Nullable
-    public Side getButtonSide(@NotNull final Location location) {
+    private Side getButtonSide(@NotNull final Location location, final boolean exact) {
         
-        if (this.buttonIn1.contains(location)) {
+        if (this.buttonIn1.contains(location, exact)) {
             return Side.SIDE_1;
-        } else if (this.buttonOut1.contains(location)) {
+        } else if (this.buttonOut1.contains(location, exact)) {
             return Side.SIDE_1;
-        } else if (this.buttonLock1.contains(location)) {
+        } else if (this.buttonLock1.contains(location, exact)) {
             return Side.SIDE_1;
-        } else if (this.buttonAccept1.contains(location)) {
+        } else if (this.buttonAccept1.contains(location, exact)) {
             return Side.SIDE_1;
-        } else if (this.buttonDeny1.contains(location)) {
+        } else if (this.buttonDeny1.contains(location, exact)) {
             return Side.SIDE_1;
-        } else if (this.buttonIn2.contains(location)) {
+        } else if (this.buttonIn2.contains(location, exact)) {
             return Side.SIDE_2;
-        } else if (this.buttonOut2.contains(location)) {
+        } else if (this.buttonOut2.contains(location, exact)) {
             return Side.SIDE_2;
-        } else if (this.buttonLock2.contains(location)) {
+        } else if (this.buttonLock2.contains(location, exact)) {
             return Side.SIDE_2;
-        } else if (this.buttonAccept2.contains(location)) {
+        } else if (this.buttonAccept2.contains(location, exact)) {
             return Side.SIDE_2;
-        } else if (this.buttonDeny2.contains(location)) {
+        } else if (this.buttonDeny2.contains(location, exact)) {
             return Side.SIDE_2;
         } else {
             return null;
@@ -579,24 +771,6 @@ public final class TradeRoom {
         return side == Side.SIDE_1 && this.getButtonDeny1().equals(location) || side == Side.SIDE_2 && this.getButtonDeny2().equals(location);
     }
     
-    @Nullable
-    public Trader getTrader1() {
-        return this.trader1;
-    }
-    
-    @Nullable
-    public Trader getTrader2() {
-        return this.trader2;
-    }
-    
-    public void setTrader1(@Nullable final Player player) {
-        this.trader1 = player == null ? null : new Trader(player);
-    }
-    
-    public void setTrader2(@Nullable final Player player) {
-        this.trader2 = player == null ? null : new Trader(player);
-    }
-    
     public boolean isActive() {
         return this.getTrader1() != null || this.getTrader2() != null;
     }
@@ -606,7 +780,7 @@ public final class TradeRoom {
     }
     
     public boolean isUsing(@NotNull final UUID uniqueId) {
-        return this.isTrader1(uniqueId) || this.isTrader2(uniqueId);
+        return this.getTrader(uniqueId) != null;
     }
     
     public boolean isTrader1(@NotNull final UUID uniqueId) {
@@ -615,6 +789,323 @@ public final class TradeRoom {
     
     public boolean isTrader2(@NotNull final UUID uniqueId) {
         return this.getTrader2() != null && this.getTrader2().getUniqueId().equals(uniqueId);
+    }
+    
+    public boolean hasNotLocked(@NotNull final UUID uniqueId) {
+        
+        if (this.isTrader1(uniqueId)) {
+            return this.getStatus() == TradeStatus.PREPARE || this.getStatus() == TradeStatus.LOCKED_2;
+        } else if (this.isTrader2(uniqueId)) {
+            return this.getStatus() == TradeStatus.PREPARE || this.getStatus() == TradeStatus.LOCKED_1;
+        } else {
+            return false;
+        }
+    }
+    
+    public boolean hasLocked(@NotNull final UUID uniqueId) {
+        return this.isTrader1(uniqueId) && this.getStatus() == TradeStatus.LOCKED_1 || this.isTrader2(uniqueId) && this.getStatus() == TradeStatus.LOCKED_2;
+    }
+    
+    public boolean hasNotAccepted(@NotNull final UUID uniqueId) {
+        
+        if (this.isTrader1(uniqueId)) {
+            return this.getStatus() == TradeStatus.DECIDE || this.getStatus() == TradeStatus.ACCEPT_2;
+        } else if (this.isTrader2(uniqueId)) {
+            return this.getStatus() == TradeStatus.DECIDE || this.getStatus() == TradeStatus.ACCEPT_1;
+        } else {
+            return false;
+        }
+    }
+    
+    public boolean hasAccepted(@NotNull final UUID uniqueId) {
+        return this.isTrader1(uniqueId) && this.getStatus() == TradeStatus.ACCEPT_1 || this.isTrader2(uniqueId) && this.getStatus() == TradeStatus.ACCEPT_2;
+    }
+    
+    public boolean hasCompleted() {
+        return this.getStatus() == TradeStatus.COMPLETE;
+    }
+    
+    @Nullable
+    public Inventory createTradeInventory(@NotNull final Server server, @NotNull final UUID uniqueId) {
+        
+        if (this.isTrader1(uniqueId)) {
+            return this.createTradeInventory(server, this.chest1);
+        } else if (this.isTrader2(uniqueId)) {
+            return this.createTradeInventory(server, this.chest2);
+        } else {
+            return null;
+        }
+    }
+    
+    @NotNull
+    public Inventory createTradeInventory(@NotNull final Server server, @NotNull final Chest chest) {
+        
+        final Inventory inventory = server.createInventory(null, 45);
+        final ItemStack[] items = chest.getInventory().getStorageContents();
+        for (int slot = 0; slot < items.length && slot < 27; slot++) {
+            inventory.setItem(slot, items[slot]);
+        }
+        
+        final ItemStack fill = new ItemStack(Material.BLACK_CONCRETE);
+        final ItemMeta fillMeta = fill.getItemMeta();
+        fillMeta.setDisplayName("");
+        fill.setItemMeta(fillMeta);
+        for (int slot = 37; slot < 44; slot++) {
+            inventory.setItem(slot, fill);
+        }
+        
+        final ItemStack reject = new ItemStack(Material.RED_CONCRETE);
+        final ItemMeta rejectMeta = reject.getItemMeta();
+        rejectMeta.setDisplayName("REJECT/CANCEL TRADE");
+        reject.setItemMeta(rejectMeta);
+        inventory.setItem(TradePlugin.SLOT_REJECT, reject);
+        
+        final ItemStack accept = new ItemStack(Material.LIME_CONCRETE);
+        final ItemMeta acceptMeta = accept.getItemMeta();
+        acceptMeta.setDisplayName("ACCEPT TRADE");
+        accept.setItemMeta(acceptMeta);
+        inventory.setItem(TradePlugin.SLOT_ACCEPT, accept);
+        
+        return inventory;
+    }
+    
+    public void swapItems(@NotNull final Player self, @NotNull final Player other) {
+        
+        final Chest chestSelf;
+        final Chest chestOther;
+        
+        if (this.isTrader1(self.getUniqueId())) {
+            chestSelf = this.chest1;
+            chestOther = this.chest2;
+        } else {
+            chestSelf = this.chest2;
+            chestOther = this.chest1;
+        }
+        
+        final Inventory extraSelf = this.transferItems(self.getServer(), self.getInventory(), chestOther.getInventory());
+        final Inventory extraOther = this.transferItems(other.getServer(), other.getInventory(), chestSelf.getInventory());
+        
+        self.sendMessage("§aTrade complete!");
+        other.sendMessage("§aTrade complete!");
+        
+        if (extraSelf != null) {
+            
+            self.sendMessage("§6There were items sent to you that could not be put in your inventory. Be sure to pick them up before leaving the trade room.");
+            final Location location = self.getLocation().add(new Vector(0.0D, 1.0D, 0.0D));
+            final World world = self.getWorld();
+            
+            for (final ItemStack item : extraSelf.getStorageContents()) {
+                if (item != null && item.getType() != Material.AIR) {
+                    world.dropItemNaturally(location, item);
+                }
+            }
+        }
+        if (extraOther != null) {
+            
+            other.sendMessage("§6There were items sent to you that could not be put in your inventory. Be sure to pick them up before leaving the trade room.");
+            final Location location = other.getLocation().add(new Vector(0.0D, 1.0D, 0.0D));
+            final World world = other.getWorld();
+            
+            for (final ItemStack item : extraOther.getStorageContents()) {
+                if (item != null && item.getType() != Material.AIR) {
+                    world.dropItemNaturally(location, item);
+                }
+            }
+        }
+    }
+    
+    @Nullable
+    public Inventory swapItems(@NotNull final Player self, @NotNull final Offline other) {
+        
+        final Chest chestSelf;
+        final Chest chestOther;
+        
+        if (this.isTrader1(self.getUniqueId())) {
+            chestSelf = this.chest1;
+            chestOther = this.chest2;
+        } else {
+            chestSelf = this.chest2;
+            chestOther = this.chest1;
+        }
+        
+        final Inventory otherInventory;
+        if (other.getInventory() == null) {
+            otherInventory = self.getServer().createInventory(null, 27);
+        } else {
+            otherInventory = other.getInventory();
+        }
+        
+        final Inventory extraSelf = this.transferItems(self.getServer(), self.getInventory(), chestOther.getInventory());
+        final Inventory extraOther = this.transferItems(self.getServer(), otherInventory, chestSelf.getInventory());
+        
+        self.sendMessage("§aTrade complete!");
+        other.setInventory(otherInventory);
+        
+        if (extraSelf != null) {
+            
+            self.sendMessage("§6There were items sent to you that could not be put in your inventory. Be sure to pick them up before leaving the trade room.");
+            final Location location = self.getLocation().add(new Vector(0.0D, 1.0D, 0.0D));
+            final World world = self.getWorld();
+            
+            for (final ItemStack item : extraSelf.getStorageContents()) {
+                if (item != null && item.getType() != Material.AIR) {
+                    world.dropItemNaturally(location, item);
+                }
+            }
+        }
+        
+        return extraOther;
+    }
+    
+    public void returnItems(@NotNull final Player self, @NotNull final Player other) {
+        this.returnItems(self);
+        this.returnItems(other);
+    }
+    
+    @Nullable
+    public Inventory returnItems(@NotNull final Player self, @Nullable final Offline other) {
+        
+        this.returnItems(self);
+        
+        if (other == null) {
+            return null;
+        }
+        return this.returnItems(self.getServer(), other);
+    }
+    
+    public void returnItems(@NotNull final Player player) {
+        
+        final Chest chest = this.isTrader1(player.getUniqueId()) ? this.chest1 : this.chest2;
+        final Inventory extra = this.transferItems(player.getServer(), player.getInventory(), chest.getInventory());
+        
+        player.sendMessage("§aReturn complete!");
+        
+        if (extra != null) {
+            
+            player.sendMessage("§6There were items returned to you that could not be put in your inventory. Be sure to pick them up before leaving the trade room.");
+            final Location location = player.getLocation().add(new Vector(0.0D, 1.0D, 0.0D));
+            final World world = player.getWorld();
+            
+            for (final ItemStack item : extra.getStorageContents()) {
+                if (item != null && item.getType() != Material.AIR) {
+                    world.dropItemNaturally(location, item);
+                }
+            }
+        }
+    }
+    
+    @Nullable
+    public Inventory returnItems(@NotNull final Server server, @NotNull final Offline offline) {
+        
+        final Chest chest = this.isTrader1(offline.getUniqueId()) ? this.chest1 : this.chest2;
+        final Inventory inventory = offline.getInventory() == null ? server.createInventory(null, 27) : offline.getInventory();
+        final Inventory extra = this.transferItems(server, inventory, chest.getInventory());
+        offline.setInventory(inventory);
+        
+        return extra;
+    }
+    
+    @Nullable
+    private Inventory transferItems(@NotNull final Server server, @NotNull final Inventory to, @NotNull final Inventory from) {
+        
+        final ItemStack[] toItems = to.getStorageContents();
+        final ItemStack[] fromItems = from.getStorageContents();
+        
+        boolean slotOpen = true;
+        for (int f = 0; f < fromItems.length && slotOpen; f++) {
+            
+            boolean moved = false;
+            ItemStack fromItem = fromItems[f];
+            if (fromItem == null || fromItem.getType() == Material.AIR) {
+                continue;
+            }
+            
+            for (int t = 0; t < toItems.length; t++) {
+                
+                final ItemStack slot = toItems[t];
+                if (slot == null || slot.getType() == Material.AIR) {
+                    continue;
+                }
+                
+                final int available = slot.getMaxStackSize() - slot.getAmount();
+                if (available == 0) {
+                    continue;
+                }
+                
+                if (slot.getType() != fromItem.getType()) {
+                    continue;
+                }
+                
+                if (!slot.getItemMeta().equals(fromItem.getItemMeta())) {
+                    continue;
+                }
+                
+                final int moveable = Math.min(fromItem.getAmount(), available);
+                final int remaining = fromItem.getAmount() - moveable;
+                toItems[t] = new ItemStack(slot.getType(), slot.getAmount() + moveable);
+                
+                if (remaining == 0) {
+                    fromItems[f] = null;
+                    moved = true;
+                    break;
+                }
+                
+                fromItem = new ItemStack(fromItem.getType(), remaining);
+                fromItems[f] = fromItem;
+            }
+            
+            if (moved) {
+                continue;
+            }
+            
+            for (int t = 0; t < toItems.length && !moved; t++) {
+                
+                final ItemStack slot = toItems[t];
+                if (slot != null && slot.getType() != Material.AIR) {
+                    continue;
+                }
+                
+                toItems[t] = fromItem;
+                fromItems[f] = null;
+                moved = true;
+            }
+            
+            if (!moved) {
+                slotOpen = false;
+            }
+        }
+        
+        to.setStorageContents(toItems);
+        
+        boolean dropRequired = false;
+        if (!slotOpen) {
+            for (final ItemStack item : fromItems) {
+                if (item != null && item.getType() != Material.AIR) {
+                    dropRequired = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!dropRequired) {
+            from.setStorageContents(fromItems);
+            return null;
+        }
+        
+        final ItemStack[] extraItems = new ItemStack[27];
+        for (int slot = 0; slot < 27; slot++) {
+            final ItemStack item = fromItems[slot];
+            if (item != null && item.getType() != Material.AIR) {
+                extraItems[slot] = item;
+                fromItems[slot] = null;
+            }
+        }
+        
+        final Inventory extra = server.createInventory(null, 27);
+        extra.setStorageContents(extraItems);
+        from.setStorageContents(fromItems);
+        
+        return extra;
     }
     
     @Override

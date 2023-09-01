@@ -26,17 +26,17 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Server;
 import org.bukkit.World;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
@@ -49,12 +49,14 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitScheduler;
+import org.bukkit.util.Vector;
 import org.cubeville.trade.bukkit.command.TradeAdminCommand;
 import org.cubeville.trade.bukkit.listener.TradeListener;
 import org.cubeville.trade.bukkit.traderoom.BuildStep;
+import org.cubeville.trade.bukkit.traderoom.CompleteReason;
+import org.cubeville.trade.bukkit.traderoom.Offline;
 import org.cubeville.trade.bukkit.traderoom.Side;
 import org.cubeville.trade.bukkit.traderoom.TradeRoom;
 import org.cubeville.trade.bukkit.traderoom.TradeRoomBuilder;
@@ -65,12 +67,13 @@ import org.jetbrains.annotations.Nullable;
 
 public final class TradePlugin extends JavaPlugin {
     
-    private static final int SLOT_REJECT = 36;
-    private static final int SLOT_ACCEPT = 44;
+    public static final int SLOT_REJECT = 36;
+    public static final int SLOT_ACCEPT = 44;
     
-    private static final long OFFLINE_TIMEOUT = 1000L * 60L * 5L;
+    private static final long OFFLINE_TIMEOUT = 1000L * 60L * 2L;
     
     private final Logger logger;
+    private final Server server;
     private final BukkitScheduler scheduler;
     private final CommandSender console;
     
@@ -79,25 +82,29 @@ public final class TradePlugin extends JavaPlugin {
     private long serverStop;
     
     private final File tradeRoomFolder;
-    private final Map<String, TradeRoom> byName;
-    private final Map<TradeRoom, TradeRoom> pairings;
-    
     private final Map<UUID, TradeRoomBuilder> builders;
+    private final Map<String, TradeRoom> tradeRooms;
+    private final Map<UUID, CancelRequest> cancelRequests;
     
-    private final File activeTradesFolder;
-    private final Map<UUID, ActiveTrade> activeTrades;
+    private final Set<UUID> recentJoins;
+    private final Set<UUID> ignoredJoins;
+    
     private final File backupInventoryFolder;
     private final Map<UUID, Inventory> tradeInventories;
     
-    private final File offlineTraderFolder;
-    private final Map<UUID, OfflineTrader> offlineTraders;
+    private final File offlineFolder;
+    private final Map<UUID, Offline> offlines;
+    
+    private final File extraFolder;
+    private final Map<UUID, List<ItemStack>> extras;
     
     public TradePlugin() {
         super();
         
         this.logger = this.getLogger();
-        this.scheduler = this.getServer().getScheduler();
-        this.console = this.getServer().getConsoleSender();
+        this.server = this.getServer();
+        this.scheduler = this.server.getScheduler();
+        this.console = this.server.getConsoleSender();
         
         final File dataFolder = this.getDataFolder();
         try {
@@ -126,6 +133,13 @@ public final class TradePlugin extends JavaPlugin {
         }
         
         this.tradeRoomFolder = new File(dataFolder, Constants.FOLDER_TRADE_ROOMS);
+        this.builders = new ConcurrentHashMap<UUID, TradeRoomBuilder>();
+        this.tradeRooms = new ConcurrentHashMap<String, TradeRoom>();
+        this.cancelRequests = new ConcurrentHashMap<UUID, CancelRequest>();
+        
+        this.recentJoins = new HashSet<UUID>();
+        this.ignoredJoins = new HashSet<UUID>();
+        
         if (!this.tradeRoomFolder.exists()) {
             if (!this.tradeRoomFolder.mkdirs()) {
                 throw new RuntimeException("TradeChest folder not created at " + this.tradeRoomFolder.getPath());
@@ -134,22 +148,8 @@ public final class TradePlugin extends JavaPlugin {
             throw new RuntimeException("TradeChest folder is not a folder. Location: " + this.tradeRoomFolder.getPath());
         }
         
-        this.byName = new ConcurrentHashMap<String, TradeRoom>();
-        this.pairings = new HashMap<TradeRoom, TradeRoom>();
-        
-        this.builders = new ConcurrentHashMap<UUID, TradeRoomBuilder>();
-        
-        this.activeTrades = new ConcurrentHashMap<UUID, ActiveTrade>();
-        this.activeTradesFolder = new File(dataFolder, Constants.FOLDER_ACTIVE_TRADES);
-        if (!this.activeTradesFolder.exists()) {
-            if (!this.activeTradesFolder.mkdirs()) {
-                throw new RuntimeException("ActiveTrade folder not created at " + this.activeTradesFolder.getPath());
-            }
-        } else if (!this.activeTradesFolder.isDirectory()) {
-            throw new RuntimeException("ActiveTrade folder is not a folder. Location: " + this.activeTradesFolder.getPath());
-        }
-        
         this.backupInventoryFolder = new File(dataFolder, Constants.FOLDER_BACKUP_INVENTORIES);
+        this.tradeInventories = new ConcurrentHashMap<UUID, Inventory>();
         if (!this.backupInventoryFolder.exists()) {
             if (!this.backupInventoryFolder.mkdirs()) {
                 throw new RuntimeException("BackupInventory folder not created at " + this.backupInventoryFolder.getPath());
@@ -158,17 +158,26 @@ public final class TradePlugin extends JavaPlugin {
             throw new RuntimeException("BackupInventory folder is not a folder. Location: " + this.backupInventoryFolder.getPath());
         }
         
-        this.tradeInventories = new ConcurrentHashMap<UUID, Inventory>();
-        
-        this.offlineTraders = new ConcurrentHashMap<UUID, OfflineTrader>();
-        this.offlineTraderFolder = new File(dataFolder, Constants.FOLDER_OFFLINE_TRADERS);
-        if (!this.offlineTraderFolder.exists()) {
-            if (!this.offlineTraderFolder.mkdirs()) {
-                throw new RuntimeException("OfflineTrader folder not created at " + this.offlineTraderFolder.getPath());
+        this.offlineFolder = new File(dataFolder, Constants.FOLDER_OFFLINE_TRADERS);
+        this.offlines = new ConcurrentHashMap<UUID, Offline>();
+        if (!this.offlineFolder.exists()) {
+            if (!this.offlineFolder.mkdirs()) {
+                throw new RuntimeException("OfflineTrader folder not created at " + this.offlineFolder.getPath());
             }
-        } else if (!this.offlineTraderFolder.isDirectory()) {
-            throw new RuntimeException("OfflineTrader folder is not a folder. Location: " + this.offlineTraderFolder.getPath());
+        } else if (!this.offlineFolder.isDirectory()) {
+            throw new RuntimeException("OfflineTrader folder is not a folder. Location: " + this.offlineFolder.getPath());
         }
+        
+        this.extraFolder = new File(dataFolder, Constants.FOLDER_OFFLINE_EXTRAS);
+        this.extras = new ConcurrentHashMap<UUID, List<ItemStack>>();
+        if (!this.extraFolder.exists()) {
+            if (!this.extraFolder.mkdirs()) {
+                throw new RuntimeException("ExtraInventory folder not created at " + this.extraFolder.getPath());
+            }
+        } else if (!this.extraFolder.isDirectory()) {
+            throw new RuntimeException("ExtraInventory folder is not a folder. Location: " + this.extraFolder.getPath());
+        }
+        
     }
     
     @Override
@@ -208,7 +217,7 @@ public final class TradePlugin extends JavaPlugin {
         this.serverStop = stopConfig.getLong(Constants.KEY_SERVER_STOP_TIME, -1L);
         
         if (this.serverStop == -1L) {
-            this.serverStop = this.serverStart - TradePlugin.OFFLINE_TIMEOUT;
+            this.serverStop = this.serverStart - OFFLINE_TIMEOUT;
         }
         
         // TradeRoom Initialization //
@@ -233,7 +242,7 @@ public final class TradePlugin extends JavaPlugin {
             
             final TradeRoom room;
             try {
-                room = new TradeRoom(config);
+                room = new TradeRoom(this.server, config);
             } catch (final IllegalArgumentException e) {
                 this.logger.log(Level.WARNING, "Unable to deserialize trade room from file at " + tradeRoomFile.getPath());
                 this.logger.log(Level.WARNING, "Skipping trade room.");
@@ -241,44 +250,14 @@ public final class TradePlugin extends JavaPlugin {
                 continue;
             }
             
-            if (this.byName.containsKey(room.getName().toLowerCase())) {
+            if (this.tradeRooms.containsKey(room.getName().toLowerCase())) {
                 this.logger.log(Level.WARNING, "Conflicting name of trade room. Duplicate already registered.");
                 this.logger.log(Level.WARNING, "Please remember that names are case-insensitive. Name: " + room.getName());
                 this.logger.log(Level.WARNING, "Skipping trade room.");
                 continue;
             }
             
-            this.byName.put(room.getName().toLowerCase(), room);
-        }
-        
-        // Active Trades
-        final File[] activeTradeFiles = this.activeTradesFolder.listFiles();
-        if (activeTradeFiles == null) {
-            throw new RuntimeException("Cannot list active trade files, null value returned.");
-        }
-        for (final File activeTradeFile : activeTradeFiles) {
-            
-            final YamlConfiguration config = new YamlConfiguration();
-            try {
-                config.load(activeTradeFile);
-            } catch (final IOException | InvalidConfigurationException | IllegalArgumentException e) {
-                this.logger.log(Level.WARNING, "Unable to load active trade file at " + activeTradeFile.getPath());
-                this.logger.log(Level.WARNING, "Skipping active trade.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-                continue;
-            }
-            
-            final ActiveTrade active;
-            try {
-                active = new ActiveTrade(this, config);
-            } catch (final IllegalArgumentException e) {
-                this.logger.log(Level.WARNING, "Unable to deserialize active trade from file at " + activeTradeFile.getPath());
-                this.logger.log(Level.WARNING, "Skipping active trade.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-                continue;
-            }
-            
-            this.activeTrades.put(active.getUniqueId1(), active);
+            this.tradeRooms.put(room.getName().toLowerCase(), room);
         }
         
         // Backup Inventories
@@ -305,7 +284,7 @@ public final class TradePlugin extends JavaPlugin {
                 continue;
             }
             
-            final TradeRoom room = this.byName.get(roomName);
+            final TradeRoom room = this.tradeRooms.get(roomName);
             if (room == null) {
                 this.logger.log(Level.WARNING, "Trade room name is invalid in backup inventory file at " + backupInventoryFile.getPath());
                 this.logger.log(Level.WARNING, "No trade room for name " + roomName);
@@ -327,8 +306,8 @@ public final class TradePlugin extends JavaPlugin {
                 continue;
             }
             
-            final Inventory backupInventory1 = this.getServer().createInventory(null, 27);
-            final Inventory backupInventory2 = this.getServer().createInventory(null, 27);
+            final Inventory backupInventory1 = this.server.createInventory(null, 27);
+            final Inventory backupInventory2 = this.server.createInventory(null, 27);
             
             final List<Map<String, Object>> items1 = (List<Map<String, Object>>) rawItems1;
             final List<Map<String, Object>> items2 = (List<Map<String, Object>>) rawItems2;
@@ -358,7 +337,7 @@ public final class TradePlugin extends JavaPlugin {
                     // Do nothing.
                 } else if (backupItems1[slot] == null) {
                     chest1Items[slot] = backupItems1[slot];
-                } else if (chest1Inventory.getStorageContents()[slot] == null) {
+                } else if (chest1Items[slot] == null) {
                     chest1Items[slot] = backupItems1[slot];
                 } else if (!backupItems1[slot].equals(chest1Items[slot])) {
                     chest1Items[slot] = backupItems1[slot];
@@ -369,7 +348,7 @@ public final class TradePlugin extends JavaPlugin {
                     // Do nothing.
                 } else if (backupItems2[slot] == null) {
                     chest2Items[slot] = backupItems2[slot];
-                } else if (chest2Inventory.getStorageContents()[slot] == null) {
+                } else if (chest2Items[slot] == null) {
                     chest2Items[slot] = backupItems2[slot];
                 } else if (!backupItems2[slot].equals(chest2Items[slot])) {
                     chest2Items[slot] = backupItems2[slot];
@@ -380,40 +359,102 @@ public final class TradePlugin extends JavaPlugin {
             chest2Inventory.setStorageContents(chest2Items);
         }
         
-        for (final ActiveTrade activeTrade : this.activeTrades.values()) {
-            if (activeTrade.getStatus() == ActiveTrade.TradeStatus.DECIDE) {
-                this.tradeInventories.put(activeTrade.getUniqueId1(), this.createTradeInventory(activeTrade.getRoom().getChest1().getInventory()));
+        for (final TradeRoom room : this.tradeRooms.values()) {
+            
+            if (room.getStatus() == null) {
+                continue;
+            }
+            if (room.getStatus().ordinal() < TradeStatus.DECIDE.ordinal()) {
+                continue;
+            }
+            if (!room.hasCompleted()) {
+                continue;
+            }
+            
+            final Trader trader1 = room.getTrader1();
+            if (trader1 != null) {
+                this.tradeInventories.put(trader1.getUniqueId(), room.createTradeInventory(this.server, room.getChest1()));
+            }
+            
+            final Trader trader2 = room.getTrader2();
+            if (trader2 != null) {
+                this.tradeInventories.put(trader2.getUniqueId(), room.createTradeInventory(this.server, room.getChest2()));
             }
         }
         
         // Offline Players Initialization //
-        final File[] offlineTraderFiles = this.offlineTraderFolder.listFiles();
-        if (offlineTraderFiles == null) {
+        final File[] offlineFiles = this.offlineFolder.listFiles();
+        if (offlineFiles == null) {
             throw new RuntimeException("Cannot list offline trader files, null value returned.");
         }
-        for (final File offlineTraderFile : offlineTraderFiles) {
+        for (final File offlineFile : offlineFiles) {
             
             final YamlConfiguration config = new YamlConfiguration();
             try {
-                config.load(offlineTraderFile);
+                config.load(offlineFile);
             } catch (final IOException | InvalidConfigurationException | IllegalArgumentException e) {
-                this.logger.log(Level.WARNING, "Unable to load offline trader file at " + offlineTraderFile.getPath());
+                this.logger.log(Level.WARNING, "Unable to load offline trader file at " + offlineFile.getPath());
                 this.logger.log(Level.WARNING, "Skipping offline trader.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 continue;
             }
             
-            final OfflineTrader trader;
+            final Offline offline;
             try {
-                trader = new OfflineTrader(this.getServer(), config);
+                offline = new Offline(config);
             } catch (final IllegalArgumentException e) {
-                this.logger.log(Level.WARNING, "Unable to deserialize offline trader from file at " + offlineTraderFile.getPath());
+                this.logger.log(Level.WARNING, "Unable to deserialize offline trader from file at " + offlineFile.getPath());
                 this.logger.log(Level.WARNING, "Skipping offline trader.");
                 this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 continue;
             }
             
-            this.offlineTraders.put(trader.getUniqueId(), trader);
+            this.offlines.put(offline.getUniqueId(), offline);
+        }
+        
+        // Extra Offline Player Inventory //
+        final File[] extraFiles = this.extraFolder.listFiles();
+        if (extraFiles == null) {
+            throw new RuntimeException("Cannot list extra inventory files, null value returned.");
+        }
+        for (final File extraFile : extraFiles) {
+            
+            final YamlConfiguration config = new YamlConfiguration();
+            try {
+                config.load(extraFile);
+            } catch (final IOException | InvalidConfigurationException | IllegalArgumentException e) {
+                this.logger.log(Level.WARNING, "Unable to load extra inventory file at " + extraFile.getPath());
+                this.logger.log(Level.WARNING, "Skipping extra inventory.");
+                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                continue;
+            }
+            
+            final String uuid = config.getString(Constants.KEY_EXTRA_UUID, null);
+            if (uuid == null) {
+                throw new IllegalArgumentException("Cannot have null UUID for extra inventory.");
+            }
+            final UUID uniqueId;
+            try {
+                uniqueId = UUID.fromString(uuid);
+            } catch (final IllegalArgumentException e) {
+                throw new IllegalArgumentException("Unable to parse UUID " + uuid + " for extra inventory.", e);
+            }
+            
+            final List<?> rawItems = config.getList(Constants.KEY_EXTRA_ITEMS, null);
+            if (rawItems == null) {
+                throw new IllegalArgumentException("Cannot have null item list for extra inventory.");
+            }
+            final List<ItemStack> stacks = new ArrayList<ItemStack>();
+            final List<Map<String, Object>> items = (List<Map<String, Object>>) rawItems;
+            for (final Map<String, Object> serialized : items) {
+                stacks.add(ItemStack.deserialize(serialized));
+            }
+            
+            if (this.extras.containsKey(uniqueId)) {
+                this.extras.get(uniqueId).addAll(stacks);
+            } else {
+                this.extras.put(uniqueId, stacks);
+            }
         }
         
         // Commands //
@@ -422,91 +463,27 @@ public final class TradePlugin extends JavaPlugin {
         
         // Server Events & Tasks //
         
-        this.getServer().getPluginManager().registerEvents(new TradeListener(this), this);
+        this.server.getPluginManager().registerEvents(new TradeListener(this), this);
         
-        this.scheduler.scheduleSyncRepeatingTask(this, () -> {
+        this.scheduler.runTaskTimer(this, () -> {
             
-            for (final OfflineTrader offlineTrader : this.offlineTraders.values()) {
+            for (final TradeRoom room : this.tradeRooms.values()) {
                 
-                final long now = System.currentTimeMillis();
-                if (offlineTrader.getCompleteReason() != null) {
-                    continue;
-                } else if (now - TradePlugin.OFFLINE_TIMEOUT < this.serverStart) {
-                    final long diff = this.serverStop - offlineTrader.getLogoutTime();
-                    if (this.serverStart + (TradePlugin.OFFLINE_TIMEOUT - diff) >= now) {
-                        continue;
-                    }
-                } else if (offlineTrader.getLogoutTime() + TradePlugin.OFFLINE_TIMEOUT >= now) {
-                    continue;
-                }
-    
-                final UUID offlinePlayerId = offlineTrader.getUniqueId();
-                final ActiveTrade offlineTrade = this.activeTrades.get(offlinePlayerId);
-                final TradeRoom offlineRoom = offlineTrade.getRoom();
-                
-                offlineTrader.setCompleteReason(OfflineTrader.CompleteReason.OFFLINE_SELF);
-                offlineTrader.setInventory(offlineTrade.getRoom().getChest1().getInventory());
-                this.saveOfflineTrader(this.console, offlineTrader);
-                
-                this.activeTrades.remove(offlinePlayerId);
-                this.deleteActiveTrade(this.console, offlineTrade);
-                offlineRoom.getChest1().getInventory().clear();
-                this.deleteChestInventories(this.console, offlineRoom);
-                
-                final TradeRoom otherRoom = this.pairings.get(offlineRoom);
-                if (otherRoom == null) {
+                if (!room.isActive()) {
                     continue;
                 }
                 
-                final Iterator<ActiveTrade> tradeIterator = this.activeTrades.values().iterator();
-                while (tradeIterator.hasNext()) {
-                    
-                    final ActiveTrade otherTrade = tradeIterator.next();
-                    if (!otherTrade.getRoom().equals(otherRoom)) {
-                        continue;
-                    }
-                    
-                    final UUID otherPlayerId = otherTrade.getUniqueId1();
-                    final Player otherPlayer = this.getServer().getPlayer(otherPlayerId);
-                    
-                    if (otherPlayer != null && otherPlayer.isOnline()) {
-                        
-                        otherPlayer.sendMessage("§cYour trade with§r §6" + offlineTrade.getName1() + "§r §chas been cancelled as they have been offline for too long.");
-                        this.itemTransfer(otherPlayer, otherTrade.getRoom().getChest1().getInventory());
-                        otherPlayer.sendMessage("§cYour items that were placed in the chest have been returned to you.");
-                        
-                        this.deleteActiveTrade(otherPlayer, otherTrade);
-                        this.deleteChestInventories(otherPlayer, otherRoom);
-                        tradeIterator.remove();
-                        continue;
-                    }
-                    
-                    OfflineTrader otherOfflineTrader = this.offlineTraders.get(otherPlayerId);
-                    if (otherOfflineTrader == null) {
-                        
-                        final long offlineNow = System.currentTimeMillis();
-                        long logoutTime = offlineNow - TradePlugin.OFFLINE_TIMEOUT;
-                        if (logoutTime < this.serverStart) {
-                            final long diff = offlineNow - this.serverStart;
-                            logoutTime = this.serverStop - (TradePlugin.OFFLINE_TIMEOUT - diff);
-                        }
-                        otherOfflineTrader = new OfflineTrader(otherPlayerId, otherTrade.getName1(), logoutTime);
-                    }
-                    
-                    if (otherOfflineTrader.getCompleteReason() == null) {
-                        otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.OFFLINE_OTHER);
-                        otherOfflineTrader.setInventory(otherTrade.getRoom().getChest1().getInventory());
-                        this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
-                        this.saveOfflineTrader(this.console, otherOfflineTrader);
-                    }
-                    
-                    this.deleteActiveTrade(this.console, otherTrade);
-                    otherRoom.getChest1().getInventory().clear();
-                    this.deleteChestInventories(this.console, otherRoom);
-                    tradeIterator.remove();
+                final Trader trader1 = room.getTrader1();
+                final Trader trader2 = room.getTrader2();
+                
+                if (trader1 != null && trader1.isOffline()) {
+                    this.processOfflineTrader(room, trader1, Side.SIDE_1);
+                }
+                if (trader2 != null && trader2.isOffline()) {
+                    this.processOfflineTrader(room, trader2, Side.SIDE_2);
                 }
             }
-        }, 10L * 20L, 10L * 20L);
+        }, 200L, 200L);
     }
     
     private void registerCommand(@NotNull final String commandName, @NotNull final TabExecutor tabExecutor) throws RuntimeException {
@@ -519,99 +496,135 @@ public final class TradePlugin extends JavaPlugin {
         command.setTabCompleter(tabExecutor);
     }
     
+    private void processOfflineTrader(@NotNull final TradeRoom room, @NotNull final Trader trader, @NotNull final Side side) {
+            
+        final long now = System.currentTimeMillis();
+        final long expire = trader.getLogoutTime() + OFFLINE_TIMEOUT;
+        
+        if (now - OFFLINE_TIMEOUT < this.serverStart) {
+            final long offlineTime = this.serverStart - this.serverStop;
+            if (expire + offlineTime >= now) {
+                return;
+            }
+        } else if (expire >= now) {
+            return;
+        }
+        
+        final Offline offline = new Offline(trader);
+        offline.setReason(CompleteReason.OFFLINE_SELF);
+        offline.setTeleport(side == Side.SIDE_1 ? room.getTeleportOut1() : room.getTeleportOut2());
+        final Inventory extra = room.returnItems(this.server, offline);
+        
+        this.offlines.put(offline.getUniqueId(), offline);
+        this.saveOffline(offline, extra);
+        
+        room.setStatus(null);
+        
+        final Trader other = side == Side.SIDE_1 ? room.getTrader2() : room.getTrader1();
+        if (other != null) {
+            
+            final Player otherPlayer = this.server.getPlayer(other.getUniqueId());
+            if (otherPlayer == null || !otherPlayer.isOnline()) {
+                
+                if (!other.isOffline()) {
+                    other.setOffline(true);
+                }
+                
+                final Offline otherOffline = new Offline(other);
+                otherOffline.setReason(CompleteReason.OFFLINE_OTHER);
+                otherOffline.setTeleport(side == Side.SIDE_1 ? room.getTeleportOut2() : room.getTeleportOut1());
+                final Inventory extraOther = room.returnItems(this.server, otherOffline);
+                
+                this.offlines.put(otherOffline.getUniqueId(), otherOffline);
+                this.saveOffline(otherOffline, extraOther);
+                
+                if (side == Side.SIDE_1) {
+                    room.setTrader2(null);
+                } else {
+                    room.setTrader1(null);
+                }
+                
+            } else {
+                
+                if (other.isOffline()) {
+                    other.setOffline(false);
+                }
+                
+                room.setStatus(TradeStatus.COMPLETE);
+                
+                otherPlayer.sendMessage("§cYour trade with " + offline.getName() + " has been cancelled because they were offline for too long.");
+                otherPlayer.sendMessage("§cPlease exit the trade room once all of your items have been returned. Be sure to check for any dropped and floating items.");
+                otherPlayer.sendMessage("§6Returning items...");
+                room.returnItems(otherPlayer);
+                
+            }
+            
+            this.deleteChestInventories(this.console, room);
+        }
+        
+        if (side == Side.SIDE_1) {
+            room.setTrader1(null);
+        } else {
+            room.setTrader2(null);
+        }
+        
+        this.saveRoom(this.console, room);
+    }
+    
     @Override
     public void onDisable() {
         
-        for (final Player player : this.getServer().getOnlinePlayers()) {
+        final Set<UUID> ignore = new HashSet<UUID>();
+        for (final Player player : this.server.getOnlinePlayers()) {
             
-            final UUID playerId = player.getUniqueId();
-            final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-            if (activeTrade == null) {
+            final UUID uniqueId = player.getUniqueId();
+            if (ignore.contains(uniqueId)) {
                 continue;
             }
             
-            final OfflineTrader offlineTrader = new OfflineTrader(player);
-            this.offlineTraders.put(playerId, offlineTrader);
-            
-            final String playerName = offlineTrader.getName();
-            final long logoutTime = offlineTrader.getLogoutTime();
-            final OfflineTrader.CompleteReason completeReason = offlineTrader.getCompleteReason();
-            final Inventory inventory = offlineTrader.getInventory();
-            
-            final List<Map<String, Object>> items;
-            if (inventory == null) {
-                items = null;
-            } else {
-                items = new ArrayList<Map<String, Object>>();
-                for (final ItemStack item : inventory.getStorageContents()) {
-                    items.add(item == null ? null : item.serialize());
+            TradeRoom room = null;
+            Trader self = null;
+            Side side = null;
+            for (final TradeRoom check : this.tradeRooms.values()) {
+                
+                final Trader check1 = check.getTrader1();
+                final Trader check2 = check.getTrader2();
+                
+                if (check1 != null && uniqueId.equals(check1.getUniqueId())) {
+                    room = check;
+                    self = check1;
+                    side = Side.SIDE_1;
+                    break;
+                } else if (check2 != null && uniqueId.equals(check2.getUniqueId())) {
+                    room = check;
+                    self = check2;
+                    side = Side.SIDE_2;
+                    break;
                 }
             }
             
-            final File offlineTraderFile = new File(this.offlineTraderFolder, playerId.toString() + ".yml");
-            try {
-                if (!offlineTraderFile.exists()) {
-                    if (!offlineTraderFile.createNewFile()) {
-                        this.console.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                        this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
-                        this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
-                        this.logger.log(Level.WARNING, "name:" + playerName);
-                        this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
-                        this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
-                        this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "OfflineTrader file not created successfully.");
-                        return;
-                    }
-                }
-            } catch (SecurityException | IOException e) {
-                this.console.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
-                this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
-                this.logger.log(Level.WARNING, "name:" + playerName);
-                this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
-                this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
-                this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to create OfflineTrader file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-                return;
+            if (self == null) {
+                continue;
             }
             
-            final YamlConfiguration config = new YamlConfiguration();
-            config.set("uuid", playerId.toString());
-            config.set("name", playerName);
-            config.set("logout_time", logoutTime);
-            config.set("complete_reason", completeReason == null ? null : completeReason.name());
-            config.set("items", items);
-            try {
-                config.save(offlineTraderFile);
-            } catch (IOException | IllegalArgumentException e) {
-                this.console.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
-                this.logger.log(Level.WARNING, "uuid: " + playerId.toString());
-                this.logger.log(Level.WARNING, "name:" + playerName);
-                this.logger.log(Level.WARNING, "logout_time:" + logoutTime);
-                this.logger.log(Level.WARNING, "complete_reason: " + (completeReason == null ? "null" : completeReason.name()));
-                this.logger.log(Level.WARNING, "items: " + (items == null ? "null" : items.toString()));
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to save OfflineTrader configuration file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+            self.setOffline(true);
+            
+            final Trader other = side == Side.SIDE_1 ? room.getTrader2() : room.getTrader1();
+            if (other == null) {
+                this.saveRoom(this.console, room, true);
+                continue;
             }
+            
+            if (!other.isOffline()) {
+                other.setOffline(true);
+            }
+            this.saveRoom(this.console, room, true);
+            ignore.add(other.getUniqueId());
         }
         
         this.serverStop = System.currentTimeMillis();
         final YamlConfiguration stopConfig = new YamlConfiguration();
-        stopConfig.set("server_stop_time", this.serverStop);
+        stopConfig.set(Constants.KEY_SERVER_STOP_TIME, this.serverStop);
         try {
             stopConfig.save(this.serverStopFile);
         } catch (IOException | IllegalArgumentException e) {
@@ -630,8 +643,8 @@ public final class TradePlugin extends JavaPlugin {
     
     public boolean blockBreak(@NotNull final Location location) {
         
-        for (final TradeRoom room : this.byName.values()) {
-            if (room.contains(location)) {
+        for (final TradeRoom room : this.tradeRooms.values()) {
+            if (room.contains(location, false)) {
                 return true;
             }
         }
@@ -643,7 +656,7 @@ public final class TradePlugin extends JavaPlugin {
         
         final Location location = chest.getLocation();
         
-        for (final TradeRoom room : this.byName.values()) {
+        for (final TradeRoom room : this.tradeRooms.values()) {
             
             final Location chest1Loc = room.getChest1().getLocation();
             if (chest1Loc.equals(location.add(1.0D, 0.0D, 0.0D))) {
@@ -673,29 +686,59 @@ public final class TradePlugin extends JavaPlugin {
     
     public boolean inventoryClick(@NotNull final Player player, @NotNull final Inventory inventory, final int slot) {
         
-        final UUID playerId = player.getUniqueId();
-        final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-        if (activeTrade == null) {
-            return false;
+        final UUID uniqueId = player.getUniqueId();
+        
+        TradeRoom room = null;
+        for (final TradeRoom check : this.tradeRooms.values()) {
+            if (check.isUsing(uniqueId)) {
+                room = check;
+                break;
+            }
         }
-    
-        if (activeTrade.getStatus() != ActiveTrade.TradeStatus.DECIDE) {
+        
+        if (room == null) {
             return false;
         }
         
-        final Inventory tradeInventory = this.tradeInventories.get(playerId);
+        final Trader self = new Trader(player);
+        final Trader other;
+        final Side otherSide;
+        
+        if (room.isTrader1(uniqueId)) {
+            other = room.getTrader2();
+            otherSide = Side.SIDE_2;
+        } else {
+            other = room.getTrader1();
+            otherSide = Side.SIDE_1;
+        }
+        
+        if (other == null) {
+            return false;
+        }
+        
+        final TradeStatus status = room.getStatus();
+        if (status == null || status.ordinal() < TradeStatus.DECIDE.ordinal()) {
+            return false;
+        }
+        
+        if (room.hasAccepted(uniqueId)) {
+            if (slot == SLOT_REJECT) {
+                player.sendMessage("§cYou have already accepted the trade. You may not reject it.");
+            } else if (slot == SLOT_ACCEPT) {
+                player.sendMessage("§aYou have already accepted the trade.");
+            }
+            return true;
+        }
+        
+        final Inventory tradeInventory = this.tradeInventories.get(uniqueId);
         if (tradeInventory == null) {
-            player.sendMessage("§cThere was an error with your trade. Please report it to a server administrator.");
-            player.sendMessage("§cIf you are not trading or the trade inventory did not appear, please report this to a server administrator as well.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE DECIDING ON A TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player: " + player.getName());
-            this.logger.log(Level.WARNING, "UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + activeTrade.getRoom().getName());
-            this.logger.log(Level.WARNING, "Trade Status: " + activeTrade.getStatus().name());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to decide on a trade.");
+            player.sendMessage("§cThere was an error with your trade. Please report it to the system administrators.");
+            player.sendMessage("§cIf you are not trading or the trade inventory did not appear, please report this to the system administrators as well.");
             this.logger.log(Level.WARNING, "No trade inventory found for player in DECIDE or later phase.");
+            this.logger.log(Level.WARNING, "Trade Room: " + room.getName());
+            this.logger.log(Level.WARNING, "Player UUID: " + uniqueId.toString());
+            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
+            this.logger.log(Level.WARNING, "Trade Status: " + status.name());
             return false;
         }
         
@@ -703,10 +746,46 @@ public final class TradePlugin extends JavaPlugin {
             return false;
         }
         
-        if (slot == TradePlugin.SLOT_REJECT) {
-            this.cancelTrade(player, false);
-        } else if (slot == TradePlugin.SLOT_ACCEPT) {
-            this.acceptTrade(player);
+        if (slot == SLOT_REJECT) {
+            
+            if (room.hasNotAccepted(uniqueId)) {
+                
+                if (this.cancelRequests.containsKey(uniqueId)) {
+                    this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                }
+                
+                this.rejectTrade(player, room, otherSide, self, other);
+                return true;
+            }
+            
+            this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+            this.cancelTrade(player, room, otherSide, self, other);
+            player.sendMessage("§aYou have cancelled the trade.");
+            player.sendMessage("§6Please remember to pick up your items that may have fallen on the ground before you leave the trade room.");
+            return true;
+            
+        } else if (slot == SLOT_ACCEPT) {
+            
+            if (this.cancelRequests.containsKey(uniqueId)) {
+                player.sendMessage("§6" + this.cancelRequests.remove(uniqueId).getType() + " request cancelled.");
+            }
+            player.sendMessage("§aYou have accepted the trade.");
+            
+            if (room.hasNotAccepted(other.getUniqueId())) {
+                
+                if (other.isOffline()) {
+                    player.sendMessage("§bPlease wait for " + other.getName() + " to log back in and finish deciding on the trade.");
+                } else {
+                    player.sendMessage("§bPlease wait while " + other.getName() + " finishes deciding on the trade.");
+                }
+                
+                room.setStatus(room.isTrader1(uniqueId) ? TradeStatus.ACCEPT_1 : TradeStatus.ACCEPT_2);
+                this.saveRoom(player, room);
+                return true;
+            }
+            
+            this.acceptTrade(player, room, otherSide, self, other);
+            return true;
         }
         
         return true;
@@ -719,7 +798,7 @@ public final class TradePlugin extends JavaPlugin {
         for (final String commandName : this.getDescription().getCommands().keySet()) {
             
             removals.add("cvtrade:" + commandName);
-            if (!player.hasPermission(this.getServer().getPluginCommand(commandName).getPermission())) {
+            if (!player.hasPermission(this.server.getPluginCommand(commandName).getPermission())) {
                 removals.add(commandName);
             }
         }
@@ -898,8 +977,9 @@ public final class TradePlugin extends JavaPlugin {
                 return;
             }
             
-            this.byName.put(room.getName().toLowerCase(), room);
-            this.saveTradeRoom(player, room);
+            this.tradeRooms.put(room.getName().toLowerCase(), room);
+            this.saveRoom(player, room);
+            this.builders.remove(player.getUniqueId());
             player.sendMessage("§aTrade room§r §6" + room.getName() + "§r §acreated successfully.");
             
             return;
@@ -921,8 +1001,8 @@ public final class TradePlugin extends JavaPlugin {
         
         final Location location = state.getLocation();
         TradeRoom room = null;
-        for (final TradeRoom check : this.byName.values()) {
-            if (check.contains(location)) {
+        for (final TradeRoom check : this.tradeRooms.values()) {
+            if (check.contains(location, true)) {
                 room = check;
                 break;
             }
@@ -1051,7 +1131,11 @@ public final class TradePlugin extends JavaPlugin {
                 // Player is outside, is not the current trader, deny
                 if (!uniqueId.equals(uniqueId1) && location.equals(room.getButtonIn1())) {
                     player.sendMessage("§cSomeone else is already using that trade room.");
-                    player.sendMessage("§cIf you wish to trade with this player, please use the room on the other side. Otherwise, wait for the player to complete their trade.");
+                    if (room.hasCompleted()) {
+                        player.sendMessage("§cThey are completing their previous trade. Please wait until they leave to start your trade.");
+                    } else {
+                        player.sendMessage("§cIf you wish to trade with this player, please use the room on the other side. Otherwise, wait for the player to complete their trade.");
+                    }
                     return true;
                 }
                 
@@ -1078,6 +1162,12 @@ public final class TradePlugin extends JavaPlugin {
             if (uniqueId.equals(uniqueId1) && !location.equals(room.getButtonIn2())) {
                 player.sendMessage("§6Unsure how you got over there. Back to your side you go!");
                 player.teleport(room.getTeleportIn1());
+                return true;
+            }
+            
+            // Player is outside, trade room is finishing previous trade, deny
+            if (room.hasCompleted()) {
+                player.sendMessage("§cThe previous trade is finishing up. Please wait until the player has left to start your trade.");
                 return true;
             }
             
@@ -1133,7 +1223,11 @@ public final class TradePlugin extends JavaPlugin {
             // Player is outside, is not the current trader, deny
             if (!uniqueId.equals(uniqueId2) && location.equals(room.getButtonIn2())) {
                 player.sendMessage("§cSomeone else is already using that trade room.");
-                player.sendMessage("§cIf you wish to trade with this player, please use the room on the other side. Otherwise, wait for the player to complete their trade.");
+                if (room.hasCompleted()) {
+                    player.sendMessage("§cThey are completing their previous trade. Please wait until they leave to start your trade.");
+                } else {
+                    player.sendMessage("§cIf you wish to trade with this player, please use the room on the other side. Otherwise, wait for the player to complete their trade.");
+                }
                 return true;
             }
             
@@ -1163,6 +1257,12 @@ public final class TradePlugin extends JavaPlugin {
             return true;
         }
         
+        // Player is outside, trade room is finishing previous trade, deny
+        if (room.hasCompleted()) {
+            player.sendMessage("§cThe previous trade is finishing up. Please wait until the player has left to start your trade.");
+            return true;
+        }
+        
         // Player is outside, start trade on side 1
         this.startTrade(player, room, side);
         return false;
@@ -1171,6 +1271,7 @@ public final class TradePlugin extends JavaPlugin {
     private boolean handleInsideRoom(@NotNull final Player player, @NotNull final BlockState state, @NotNull final TradeRoom room, @NotNull final Side side) {
         
         final Location location = state.getLocation();
+        final TradeStatus status = room.getStatus();
         final Trader self;
         final Trader other;
         
@@ -1198,37 +1299,75 @@ public final class TradePlugin extends JavaPlugin {
             this.logger.log(Level.WARNING, "Activating X: " + location.getBlockX());
             this.logger.log(Level.WARNING, "Activating Y: " + location.getBlockY());
             this.logger.log(Level.WARNING, "Activating Z: " + location.getBlockZ());
+            this.logger.log(Level.WARNING, "Trade Status: " + (room.getStatus() == null ? "null" : room.getStatus().name()));
             this.logger.log(Level.WARNING, "Trader 1 UUID: " + (trader1 == null ? "null" : trader1.getUniqueId().toString()));
             this.logger.log(Level.WARNING, "Trader 1 Name: " + (trader1 == null ? "null" : trader1.getName()));
-            this.logger.log(Level.WARNING, "Trader 1 Status: " + (trader1 == null ? "null" : trader1.getStatus().name()));
             this.logger.log(Level.WARNING, "Trader 2 UUID: " + (trader2 == null ? "null" : trader2.getUniqueId().toString()));
             this.logger.log(Level.WARNING, "Trader 2 Name: " + (trader2 == null ? "null" : trader2.getName()));
-            this.logger.log(Level.WARNING, "Trader 2 Status: " + (trader2 == null ? "null" : trader2.getStatus().name()));
+            
+            return true;
+        }
+        
+        if (status == null) {
+            
+            // This should never happen, but handle it anyway.
+            player.sendMessage("§cAn unknown error occurred. Please report it to the system administrators.");
+            
+            final Trader trader1 = room.getTrader1();
+            final Trader trader2 = room.getTrader2();
+            
+            this.logger.log(Level.WARNING, "Trade room is active, trade status is null.");
+            this.logger.log(Level.WARNING, "Trade Room: " + room.getName());
+            this.logger.log(Level.WARNING, "Player UUID: " + player.getUniqueId().toString());
+            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
+            this.logger.log(Level.WARNING, "Activating World: " + (location.getWorld() == null ? "null" : location.getWorld().getName()));
+            this.logger.log(Level.WARNING, "Activating X: " + location.getBlockX());
+            this.logger.log(Level.WARNING, "Activating Y: " + location.getBlockY());
+            this.logger.log(Level.WARNING, "Activating Z: " + location.getBlockZ());
+            this.logger.log(Level.WARNING, "Trade Status: null");
+            this.logger.log(Level.WARNING, "Trader 1 UUID: " + (trader1 == null ? "null" : trader1.getUniqueId().toString()));
+            this.logger.log(Level.WARNING, "Trader 1 Name: " + (trader1 == null ? "null" : trader1.getName()));
+            this.logger.log(Level.WARNING, "Trader 2 UUID: " + (trader2 == null ? "null" : trader2.getUniqueId().toString()));
+            this.logger.log(Level.WARNING, "Trader 2 Name: " + (trader2 == null ? "null" : trader2.getName()));
             
             return true;
         }
         
         final UUID uniqueId = player.getUniqueId();
-        final TradeStatus status = self.getStatus();
         
         if (room.isChest(location, side)) {
+            
+            if (room.hasCompleted()) {
+                
+                if (this.cancelRequests.containsKey(uniqueId)) {
+                    this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                }
+                
+                player.sendMessage("§6You cannot open the chest as you have already completed the trade.");
+                player.sendMessage("§6Please make sure you pick up any items you own, and please exit the room.");
+                return true;
+            }
+            
+            if (this.cancelRequests.containsKey(uniqueId)) {
+                player.sendMessage("§6" + this.cancelRequests.remove(uniqueId).getType() + " request cancelled.");
+            }
             
             if (other == null) {
                 player.sendMessage("§cPlease wait to put your items in the chest until another player begins a trade with you.");
                 return true;
             }
             
-            if (status == TradeStatus.PREPARE) {
+            if (room.hasNotLocked(uniqueId)) {
                 return false;
             }
             
-            if (status == TradeStatus.LOCKED) {
+            if (room.hasLocked(uniqueId)) {
                 player.sendMessage("§cYou may not open the chest, as you have locked your trade in.");
                 player.sendMessage("§cIf you wish to change your items, please cancel the trade and then re-start it.");
                 return true;
             }
             
-            if (status == TradeStatus.DECIDE) {
+            if (room.hasNotAccepted(uniqueId)) {
                 
                 final Inventory tradeInventory = this.tradeInventories.get(uniqueId);
                 if (tradeInventory == null) {
@@ -1241,12 +1380,11 @@ public final class TradePlugin extends JavaPlugin {
                     this.logger.log(Level.WARNING, "Activating X: " + location.getBlockX());
                     this.logger.log(Level.WARNING, "Activating Y: " + location.getBlockY());
                     this.logger.log(Level.WARNING, "Activating Z: " + location.getBlockZ());
+                    this.logger.log(Level.WARNING, "Trade Status: " + status.name());
                     this.logger.log(Level.WARNING, "Trader 1 UUID: " + self.getUniqueId().toString());
                     this.logger.log(Level.WARNING, "Trader 1 Name: " + self.getName());
-                    this.logger.log(Level.WARNING, "Trader 1 Status: " + self.getStatus().name());
                     this.logger.log(Level.WARNING, "Trader 2 UUID: " + other.getUniqueId().toString());
                     this.logger.log(Level.WARNING, "Trader 2 Name: " + other.getName());
-                    this.logger.log(Level.WARNING, "Trader 2 Status: " + other.getStatus().name());
                     return true;
                 }
                 
@@ -1259,280 +1397,460 @@ public final class TradePlugin extends JavaPlugin {
             }
             
             player.sendMessage("§6You cannot open the chest as you have already accepted the trade.");
-            player.sendMessage("§6Please wait for the other player to make their decision.");
+            if (other.isOffline()) {
+                player.sendMessage("§6Please wait for " + other.getName() + " to log back in and make their decision.");
+            } else {
+                player.sendMessage("§6Please wait for " + other.getName() + " to make their decision.");
+            }
+            
             return true;
         }
         
         if (room.isButtonOut(location, side)) {
             
+            if (room.hasCompleted()) {
+                
+                if (this.cancelRequests.containsKey(uniqueId)) {
+                    this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                }
+                
+                player.sendMessage("§aThank you for using the trade room.");
+                if (side == Side.SIDE_1) {
+                    player.teleport(room.getTeleportOut1());
+                    room.setTrader1(null);
+                } else {
+                    player.teleport(room.getTeleportOut2());
+                    room.setTrader2(null);
+                }
+                
+                if (other == null) {
+                    room.setStatus(null);
+                }
+                this.saveRoom(player, room);
+                return false;
+            }
             
+            if (!this.cancelRequests.containsKey(uniqueId)) {
+                
+                this.cancelRequests.put(uniqueId, new CancelRequest("Exit", this.scheduler.runTaskLater(this, () -> {
+                    if (this.cancelRequests.containsKey(uniqueId)) {
+                        player.sendMessage("§c" + this.cancelRequests.remove(uniqueId).getType() + " confirmation expired.");
+                    }
+                }, 600L).getTaskId()));
+                
+                player.sendMessage("§cAre you sure you want to exit the trade room?");
+                player.sendMessage("§6Press the exit button again within 30 seconds to exit the trade room.");
+                player.sendMessage("§bIf you do not wish to exit the trade room, please use the lock or accept buttons, or the chest, or wait 30 seconds.");
+                return false;
+            }
+            
+            final Player otherPlayer = other == null ? null : this.server.getPlayer(other.getUniqueId());
+            if (side == Side.SIDE_1) {
+                player.teleport(room.getTeleportOut1());
+                if (otherPlayer != null && otherPlayer.isOnline()) {
+                    otherPlayer.teleport(room.getTeleportOut2());
+                }
+            } else {
+                player.teleport(room.getTeleportOut2());
+                if (otherPlayer != null && otherPlayer.isOnline()) {
+                    otherPlayer.teleport(room.getTeleportOut1());
+                }
+            }
+            
+            this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+            this.cancelTrade(player, room, side.getOther(), self, other);
+            
+            room.setStatus(null);
+            room.setTrader1(null);
+            room.setTrader2(null);
+            this.saveRoom(player, room);
+            
+            player.sendMessage("§aYou have exited the trade room.");
+            if (otherPlayer != null && otherPlayer.isOnline()) {
+                otherPlayer.sendMessage("§aYou have exited the trade room.");
+            }
+            
+            return false;
         }
         
         if (room.isButtonLock(location, side)) {
             
+            if (room.hasCompleted()) {
+                
+                if (this.cancelRequests.containsKey(uniqueId)) {
+                    this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                }
+                
+                player.sendMessage("§cYou have already completed your trade.");
+                player.sendMessage("§6Please make sure you pick up any items you own, and please exit the room.");
+                return true;
+            }
             
+            if (this.cancelRequests.containsKey(uniqueId)) {
+                player.sendMessage("§6" + this.cancelRequests.remove(uniqueId).getType() + " request cancelled.");
+            }
+            
+            if (other == null) {
+                player.sendMessage("§cYou cannot use this button until another player begins a trade with you.");
+                return true;
+            }
+            
+            if (room.hasNotLocked(uniqueId)) {
+                
+                this.saveChestInventories(player, room);
+                player.sendMessage("§aYou have locked in your items for the trade.");
+                
+                if (room.hasNotLocked(other.getUniqueId())) {
+                    
+                    if (other.isOffline()) {
+                        player.sendMessage("§bPlease wait for " + other.getName() + " to log back in and finish selecting what they wish to trade.");
+                    } else {
+                        player.sendMessage("§bPlease wait while " + other.getName() + " finishes selecting what they wish to trade.");
+                    }
+                    
+                    room.setStatus(room.isTrader1(uniqueId) ? TradeStatus.LOCKED_1 : TradeStatus.LOCKED_2);
+                    this.saveRoom(player, room);
+                    return false;
+                }
+                
+                room.setStatus(TradeStatus.DECIDE);
+                this.saveRoom(player, room);
+                this.displayNewTrade(player, location, room, status, self, other);
+                return false;
+            }
+            
+            if (room.hasLocked(uniqueId)) {
+                
+                player.sendMessage("§cYou have already locked in your trade.");
+                if (other.isOffline()) {
+                    player.sendMessage("§bPlease wait for " + other.getName() + " to log back in and finish selecting what they wish to trade.");
+                } else {
+                    player.sendMessage("§bPlease wait while " + other.getName() + " finishes selecting what they wish to trade.");
+                }
+                return true;
+            }
+            
+            if (!room.hasAccepted(uniqueId)) {
+                player.sendMessage("§cYou have already locked in your trade, you must choose whether to accept or reject the trade.");
+                return true;
+            }
+            
+            player.sendMessage("§cYou have already accepted the trade.");
+            if (other.isOffline()) {
+                player.sendMessage("§6Please wait for " + other.getName() + " to log back in and make their decision.");
+            } else {
+                player.sendMessage("§6Please wait for " + other.getName() + " to make their decision.");
+            }
+            return true;
         }
         
         if (room.isButtonAccept(location, side)) {
             
+            if (room.hasCompleted()) {
+                
+                if (this.cancelRequests.containsKey(uniqueId)) {
+                    this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                }
+                
+                player.sendMessage("§6You cannot open the chest as you have already completed the trade.");
+                player.sendMessage("§6Please make sure you pick up any items you own, and please exit the room.");
+                return true;
+            }
             
+            if (this.cancelRequests.containsKey(uniqueId)) {
+                player.sendMessage("§6" + this.cancelRequests.remove(uniqueId).getType() + " request cancelled.");
+            }
+            
+            if (other == null) {
+                player.sendMessage("§cYou cannot use this button until another player begins a trade with you.");
+                return true;
+            }
+            
+            if (room.hasNotLocked(uniqueId)) {
+                player.sendMessage("§cYou must select your items to trade, and then press the lock button first.");
+                return true;
+            }
+            
+            if (room.hasLocked(uniqueId)) {
+                player.sendMessage("§cYou must wait for " + other.getName() + " to select the items that they wish to trade.");
+                return true;
+            }
+            
+            if (room.hasNotAccepted(uniqueId)) {
+                
+                player.sendMessage("§aYou have accepted the trade.");
+                
+                if (room.hasNotAccepted(other.getUniqueId())) {
+                    
+                    if (other.isOffline()) {
+                        player.sendMessage("§bPlease wait for " + other.getName() + " to log back in and finish deciding on the trade.");
+                    } else {
+                        player.sendMessage("§bPlease wait while " + other.getName() + " finishes deciding on the trade.");
+                    }
+                    
+                    room.setStatus(room.isTrader1(uniqueId) ? TradeStatus.ACCEPT_1 : TradeStatus.ACCEPT_2);
+                    this.saveRoom(player, room);
+                    return false;
+                }
+                
+                this.acceptTrade(player, room, side.getOther(), self, other);
+                return false;
+            }
+            
+            player.sendMessage("§cYou have already accepted the trade.");
+            if (other.isOffline()) {
+                player.sendMessage("§6Please wait for " + other.getName() + " to log back in and make their decision.");
+            } else {
+                player.sendMessage("§6Please wait for " + other.getName() + " to make their decision.");
+            }
+            return true;
         }
         
         if (room.isButtonDeny(location, side)) {
             
+            if (room.hasCompleted()) {
+                
+                if (this.cancelRequests.containsKey(uniqueId)) {
+                    this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                }
+                
+                player.sendMessage("§aThank you for using the trade room.");
+                if (side == Side.SIDE_1) {
+                    player.teleport(room.getTeleportOut1());
+                    room.setTrader1(null);
+                } else {
+                    player.teleport(room.getTeleportOut2());
+                    room.setTrader2(null);
+                }
+                
+                if (other == null) {
+                    room.setStatus(null);
+                }
+                this.saveRoom(player, room);
+                return false;
+            }
             
+            if (other == null || room.hasNotLocked(uniqueId) || room.hasLocked(uniqueId)) {
+                
+                if (!this.cancelRequests.containsKey(uniqueId)) {
+                    
+                    this.cancelRequests.put(uniqueId, new CancelRequest("Cancel", this.scheduler.runTaskLater(this, () -> {
+                        if (this.cancelRequests.containsKey(uniqueId)) {
+                            player.sendMessage("§c" + this.cancelRequests.remove(uniqueId).getType() + " confirmation expired.");
+                        }
+                    }, 600L).getTaskId()));
+                    
+                    player.sendMessage("§cAre you sure you want to cancel the trade?");
+                    player.sendMessage("§6Press the exit button again within 30 seconds to cancel the trade.");
+                    player.sendMessage("§bIf you do not wish to cancel the trade, please use the lock or accept buttons, or the chest, or wait 30 seconds.");
+                    return false;
+                }
+                
+                this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                this.cancelTrade(player, room, side.getOther(), self, other);
+                player.sendMessage("§aYou have cancelled the trade.");
+                player.sendMessage("§6Please remember to pick up your items that may have fallen on the ground before you leave the trade room.");
+                return false;
+            }
+            
+            if (room.hasNotAccepted(uniqueId)) {
+                
+                if (this.cancelRequests.containsKey(uniqueId)) {
+                    this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+                }
+                
+                this.rejectTrade(player, room, side.getOther(), self, other);
+                return false;
+            }
+            
+            if (!this.cancelRequests.containsKey(uniqueId)) {
+                
+                this.cancelRequests.put(uniqueId, new CancelRequest("Cancel", this.scheduler.runTaskLater(this, () -> {
+                    if (this.cancelRequests.containsKey(uniqueId)) {
+                        player.sendMessage("§c" + this.cancelRequests.remove(uniqueId).getType() + " confirmation expired.");
+                    }
+                }, 600L).getTaskId()));
+                
+                player.sendMessage("§cAre you sure you want to cancel the trade?");
+                player.sendMessage("§6Press the exit button again within 30 seconds to cancel the trade.");
+                player.sendMessage("§bIf you do not wish to cancel the trade, please use the lock or accept buttons, or the chest, or wait 30 seconds.");
+                return false;
+            }
+            
+            this.scheduler.cancelTask(this.cancelRequests.remove(uniqueId).getTaskId());
+            this.cancelTrade(player, room, side.getOther(), self, other);
+            player.sendMessage("§aYou have cancelled the trade.");
+            player.sendMessage("§6Please remember to pick up your items that may have fallen on the ground before you leave the trade room.");
+            return false;
         }
         
         return false;
     }
     
-    public void playerJoin(@NotNull final Player player) {
+    public void playerJoin(@NotNull final UUID uniqueId) {
         
-        final UUID playerId = player.getUniqueId();
-        final OfflineTrader offlineTrader = this.offlineTraders.remove(playerId);
-        if (offlineTrader == null) {
-            return;
-        }
+        this.recentJoins.add(uniqueId);
+        final Offline offline = this.offlines.get(uniqueId);
         
-        final OfflineTrader.CompleteReason completeReason = offlineTrader.getCompleteReason();
-        if (completeReason != null) {
+        if (offline != null) {
             
-            this.scheduler.scheduleSyncDelayedTask(this, () -> {
+            final CompleteReason reason = offline.getReason() == null ? CompleteReason.ERROR : offline.getReason();
+            this.scheduler.runTaskLater(this, () -> {
                 
-                //TODO: Check to see if this may throw null pointer if player is
-                //      offline and is thus null 3 seconds later, when this runs.
-                if (!player.isOnline()) {
-                    this.offlineTraders.put(playerId, offlineTrader);
+                this.recentJoins.remove(uniqueId);
+                final Player player = this.server.getPlayer(uniqueId);
+                if (player == null || !player.isOnline()) {
                     return;
                 }
                 
-                player.sendMessage(completeReason.getMessage());
+                this.offlines.remove(uniqueId);
+                player.sendMessage(reason.getMessage());
                 
-                final Inventory inventory = offlineTrader.getInventory();
-                if (inventory == null) {
-                    this.deleteOfflineTrader(player, offlineTrader);
-                    return;
+                final Location teleport = offline.getTeleport();
+                if (teleport != null) {
+                    player.teleport(teleport);
+                    player.sendMessage("§aYou have been moved outside of the trade room.");
                 }
                 
-                this.itemTransfer(player, inventory);
-                if (completeReason == OfflineTrader.CompleteReason.ACCEPTED) {
-                    player.sendMessage("§aThe items that you received as part of the trade have been placed in your inventory.");
-                } else {
-                    player.sendMessage("§cThe items that you placed in the chest have been returned to you.");
+                final Inventory inventory = offline.getInventory();
+                if (inventory != null) {
+                    this.transferItems(player, inventory, reason);
                 }
                 
-                this.deleteOfflineTrader(player, offlineTrader);
-            }, 3L * 20L);
+                this.deleteOffline(offline);
+                
+            }, 60L);
             
             return;
         }
         
-        this.scheduler.scheduleSyncDelayedTask(this, () -> {
+        this.scheduler.runTaskLater(this, () -> {
             
-            //TODO: Check to see if this may throw null pointer if player is
-            //      offline and is thus null 3 seconds later, when this runs.
-            if (!player.isOnline()) {
-                this.offlineTraders.put(playerId, offlineTrader);
+            this.recentJoins.remove(uniqueId);
+            final Player player = this.server.getPlayer(uniqueId);
+            if (player == null || !player.isOnline()) {
                 return;
             }
             
-            this.deleteOfflineTrader(player, offlineTrader);
-            
-            final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-            if (activeTrade == null) {
-                
-                player.sendMessage("§cThere was an error resuming your trade. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE AUTOMATICALLY RESTARTING TRADE DURING PLAYER JOIN");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-                this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Player " + player.getName() + " has rejoined the server during a trade.");
-                this.logger.log(Level.WARNING, "Player is OfflineTrader, no ActiveTrade found.");
-                
+            if (this.ignoredJoins.remove(uniqueId)) {
                 return;
             }
             
-            final TradeRoom room = activeTrade.getRoom();
-            final TradeRoom linkedRoom = this.pairings.get(room);
-            if (linkedRoom == null) {
+            TradeRoom room = null;
+            Trader self = null;
+            Side side = null;
+            for (final TradeRoom check : this.tradeRooms.values()) {
                 
-                player.sendMessage("§cThere was an error resuming your trade. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE AUTOMATICALLY RESTARTING TRADE DURING PLAYER JOIN");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-                this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-                this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-                this.logger.log(Level.WARNING, "Configured Linked TradeChest: " + room.getLinked());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Player " + player.getName() + " has rejoined the server during a trade.");
-                this.logger.log(Level.WARNING, "No linked TradeChest to the one listed above.");
+                final Trader check1 = check.getTrader1();
+                final Trader check2 = check.getTrader2();
                 
-                this.itemTransfer(player, room.getChest1().getInventory());
-                if (this.tradeInventories.containsKey(playerId)) {
-                    if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                        player.closeInventory();
-                    }
-                    this.tradeInventories.remove(playerId);
-                }
-                
-                this.activeTrades.remove(playerId);
-                this.deleteActiveTrade(player, activeTrade);
-                this.deleteChestInventories(player, room);
-                player.sendMessage("§cYour trade has been automatically cancelled. Any items you put in the chest have been automatically returned to you.");
-                
-                return;
-            }
-            
-            ActiveTrade linkedTrade = null;
-            for (final ActiveTrade checkTrade : this.activeTrades.values()) {
-                if (checkTrade.getRoom().equals(linkedRoom)) {
-                    linkedTrade = checkTrade;
+                if (check1 != null && uniqueId.equals(check1.getUniqueId())) {
+                    room = check;
+                    self = check1;
+                    side = Side.SIDE_1;
+                    break;
+                } else if (check2 != null && uniqueId.equals(check2.getUniqueId())) {
+                    room = check;
+                    self = check2;
+                    side = Side.SIDE_2;
                     break;
                 }
             }
             
-            if (linkedTrade == null) {
+            if (self == null) {
                 return;
             }
             
-            final UUID otherPlayerId = linkedTrade.getUniqueId1();
-            final Player otherPlayer = this.getServer().getPlayer(otherPlayerId);
-            if (otherPlayer != null && otherPlayer.isOnline()) {
-                
-                player.sendMessage("§aYou were trading with§r §6" + otherPlayer.getName() + "§r§a.");
-                player.sendMessage("§aYour trade has been restarted where you left off.");
-                
-                otherPlayer.sendMessage("§6" + player.getName() + "§r §ahas logged back in.");
-                otherPlayer.sendMessage("§aYour trade can continue.");
-                
-                if (activeTrade.getStatus() == ActiveTrade.TradeStatus.DECIDE) {
-                    player.openInventory(this.tradeInventories.get(playerId));
-                }
-                if (linkedTrade.getStatus() == ActiveTrade.TradeStatus.DECIDE) {
-                    otherPlayer.openInventory(this.tradeInventories.get(otherPlayerId));
-                }
-                
+            self.setOffline(false);
+            
+            final Trader other = side == Side.SIDE_1 ? room.getTrader2() : room.getTrader1();
+            if (other == null) {
+                player.sendMessage("§aYou have re-joined your trade. There is no one currently trading with you.");
+                this.saveRoom(player, room);
                 return;
             }
             
-            OfflineTrader otherOfflineTrader = this.offlineTraders.get(otherPlayerId);
-            if (otherOfflineTrader == null) {
+            final Player otherPlayer = this.server.getPlayer(other.getUniqueId());
+            if (otherPlayer == null || !otherPlayer.isOnline()) {
                 
-                player.sendMessage("§cThere was an error resuming your trade. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE AUTOMATICALLY RESTARTING TRADE DURING PLAYER JOIN");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-                this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-                this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-                this.logger.log(Level.WARNING, "Linked TradeChest: " + linkedRoom.getName());
-                this.logger.log(Level.WARNING, "Other Player Name: " + linkedTrade.getName1());
-                this.logger.log(Level.WARNING, "Other Player UUID: " + otherPlayerId.toString());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Player " + player.getName() + " has rejoined the server during a trade.");
-                this.logger.log(Level.WARNING, "Other player is not online, has an ActiveTrade, but does not have an OfflineTrader object.");
-                
-                if (this.tradeInventories.containsKey(playerId)) {
-                    if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                        player.closeInventory();
-                    }
-                    this.tradeInventories.remove(playerId);
+                if (!other.isOffline()) {
+                    other.setOffline(true);
                 }
                 
-                this.itemTransfer(player, room.getChest1().getInventory());
-                this.activeTrades.remove(playerId);
-                this.deleteActiveTrade(player, activeTrade);
-                this.deleteChestInventories(player, room);
-                player.sendMessage("§cYour trade has been automatically cancelled. Any items you put in the chest have been automatically returned to you.");
+                player.sendMessage("§aYou have re-joined your trade.");
+                player.sendMessage("§6" + other.getName() + " is offline, the trade will restart when the log back in.");
+                player.sendMessage("§6If they do not log in within the next§r §b" + this.formatTime(other.getLogoutTime()) + "§r§6, the trade will automatically be cancelled.");
                 
-                final long now = System.currentTimeMillis();
-                long logoutTime = now - TradePlugin.OFFLINE_TIMEOUT;
-                if (logoutTime < this.serverStart) {
-                    final long diff = now - this.serverStart;
-                    logoutTime = this.serverStop - (TradePlugin.OFFLINE_TIMEOUT - diff);
-                }
-                
-                otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName1(), logoutTime);
-                otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
-                otherOfflineTrader.setInventory(linkedRoom.getChest1().getInventory());
-                this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
-                this.saveOfflineTrader(this.console, otherOfflineTrader);
-                
-                this.activeTrades.remove(otherPlayerId);
-                this.deleteActiveTrade(this.console, linkedTrade);
-                linkedRoom.getChest1().getInventory().clear();
-                this.deleteChestInventories(this.console, linkedRoom);
-                
+                this.saveRoom(player, room);
                 return;
             }
             
-            player.sendMessage("§b" + otherOfflineTrader.getName() + "§r §6is offline.");
-            player.sendMessage("§6The trade will resume where it left off when they log back on.");
-            player.sendMessage("§6If they do not log in within the next§r §b" + this.formatTime(otherOfflineTrader.getLogoutTime()) + "§r§6, the trade will automatically be cancelled.");
-        }, 3L * 20L);
+            if (other.isOffline()) {
+                other.setOffline(false);
+            }
+            
+            player.sendMessage("§aYou have re-joined your trade. " + other.getName() + " is online, you can continue where you left off.");
+            otherPlayer.sendMessage("§a" + self.getName() + " has logged in and re-joined your trade, you can continue where you left off.");
+            
+            this.saveRoom(player, room);
+            
+        }, 60L);
     }
     
-    public void playerLeave(@NotNull final Player player) {
+    public void playerLeave(@NotNull final UUID uniqueId) {
         
-        final UUID playerId = player.getUniqueId();
-        final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-        if (activeTrade == null) {
-            return;
-        }
-        
-        final OfflineTrader offlineTrader = new OfflineTrader(player);
-        this.offlineTraders.put(playerId, offlineTrader);
-        
-        final TradeRoom room = activeTrade.getRoom();
-        
-/*        // No linked chest, this is some type of error.
-        if (linkedRoom == null) {
+        TradeRoom room = null;
+        Trader self = null;
+        Side side = null;
+        for (final TradeRoom check : this.tradeRooms.values()) {
             
-            this.logger.log(Level.WARNING, "ISSUE WHILE PLAYER LEFT DURING A TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-            this.logger.log(Level.WARNING, "Configured Linked TradeChest: " + room.getLinked());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " has left during a trade.");
-            this.logger.log(Level.WARNING, "No linked TradeChest to the one listed above.");
+            final Trader check1 = check.getTrader1();
+            final Trader check2 = check.getTrader2();
             
-            this.tradeInventories.remove(playerId);
-            
-            offlineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
-            offlineTrader.setInventory(room.getChest1().getInventory());
-            this.saveOfflineTrader(this.console, offlineTrader);
-            
-            this.activeTrades.remove(playerId);
-            this.deleteActiveTrade(this.console, activeTrade);
-            room.getChest1().getInventory().clear();
-            this.deleteChestInventories(this.console, room);
-            return;
-        }*/
-        
-        this.saveOfflineTrader(this.console, offlineTrader);
-        
-        ActiveTrade linkedTrade = null;
-        for (final ActiveTrade checkTrade : this.activeTrades.values()) {
-            if (checkTrade.getRoom().equals(linkedRoom)) {
-                linkedTrade = checkTrade;
+            if (check1 != null && uniqueId.equals(check1.getUniqueId())) {
+                room = check;
+                self = check1;
+                side = Side.SIDE_1;
+                break;
+            } else if (check2 != null && uniqueId.equals(check2.getUniqueId())) {
+                room = check;
+                self = check2;
+                side = Side.SIDE_2;
                 break;
             }
         }
         
-        // No one else has started to trade using the linked chest.
-        if (linkedTrade == null) {
+        if (self == null) {
             return;
         }
         
-        // Someone else has started to trade using the linked chest.
-        final UUID otherPlayerId = linkedTrade.getUniqueId1();
-        final Player otherPlayer = this.getServer().getPlayer(otherPlayerId);
-        if (otherPlayer != null && otherPlayer.isOnline()) {
-            otherPlayer.sendMessage("§b" + player.getName() + "§r §6has logged out. They have§r §b" + this.formatTime(offlineTrader.getLogoutTime()) + "§r §6to log back in, or your trade with them will be automatically cancelled.");
-            otherPlayer.sendMessage("§6You may also cancel the trade early yourself.");
+        self.setOffline(true);
+        
+        final Trader other = side == Side.SIDE_1 ? room.getTrader2() : room.getTrader1();
+        if (other == null) {
+            this.saveRoom(this.console, room);
+            return;
         }
+        
+        final Player otherPlayer = this.server.getPlayer(other.getUniqueId());
+        if (otherPlayer == null || !otherPlayer.isOnline()) {
+            
+            if (!other.isOffline()) {
+                other.setOffline(true);
+            }
+            
+            this.saveRoom(this.console, room);
+            return;
+        }
+        
+        if (other.isOffline()) {
+            other.setOffline(false);
+        }
+        
+        otherPlayer.sendMessage("§a" + self.getName() + " has logged out during your trade. The trade will automatically resume when the log back in.");
+        otherPlayer.sendMessage("§6If they do not log in within the next§r §b" + this.formatTime(self.getLogoutTime()) + "§r§6, the trade will automatically be cancelled.");
+        
+        this.saveRoom(this.console, room);
     }
     
     /////////////////////
@@ -1540,7 +1858,7 @@ public final class TradePlugin extends JavaPlugin {
     /////////////////////
     
     public boolean tradeRoomExists(@NotNull final String name) {
-        return this.byName.containsKey(name.toLowerCase());
+        return this.tradeRooms.containsKey(name.toLowerCase());
     }
     
     public void startBuilder(@NotNull final Player player) {
@@ -1676,7 +1994,7 @@ public final class TradePlugin extends JavaPlugin {
         
         if (step == BuildStep.TELEPORT_OUT_2) {
             
-            if (!builder.setTeleportOut1(player.getLocation())) {
+            if (!builder.setTeleportOut2(player.getLocation())) {
                 player.sendMessage("§cPlease try this step again.");
                 return;
             }
@@ -1691,846 +2009,447 @@ public final class TradePlugin extends JavaPlugin {
         player.sendMessage("§cYou are currently on the following step:§r §6" + step.name().toLowerCase());
     }
     
-    public boolean isTrading(@NotNull final UUID playerId) {
-        return this.activeTrades.containsKey(playerId);
-    }
-    
-    public void listRooms(@NotNull final Player player, final boolean small) {
+    private void startTrade(@NotNull final Player player, @NotNull final TradeRoom room, @NotNull final Side side) {
         
-        player.sendMessage("§8================================");
-        player.sendMessage("§6Trade Chests§r §f-§r §b(" + this.byName.size() + ")");
-        player.sendMessage("§8--------------------------------");
-        
-        if (small) {
-            final StringBuilder builder = new StringBuilder();
-            final Iterator<TradeRoom> iterator = this.byName.values().iterator();
-            while (iterator.hasNext()) {
-                builder.append("§a").append(iterator.next().getName());
-                if (iterator.hasNext()) {
-                    builder.append(", §b").append(iterator.next().getName());
-                }
-                if (iterator.hasNext()) {
-                    builder.append(", ");
-                }
-            }
-            
-            if (builder.toString().isEmpty()) {
-                builder.append("§cNone");
-            }
-            
-            player.sendMessage(builder.toString());
-            player.sendMessage("§8================================");
-            return;
+        if (this.recentJoins.contains(player.getUniqueId())) {
+            this.ignoredJoins.add(player.getUniqueId());
         }
         
-        if (this.byName.values().isEmpty()) {
-            player.sendMessage("§cNone");
+        final Trader self = new Trader(player);
+        final Trader other;
+        
+        if (side == Side.SIDE_1) {
+            player.teleport(room.getTeleportIn1());
+            room.setTrader1(self);
+            other = room.getTrader2();
         } else {
-            for (final TradeRoom room : this.byName.values()) {
-                player.sendMessage(" §f-§r §a" + room.getName());
-            }
+            player.teleport(room.getTeleportIn2());
+            room.setTrader2(self);
+            other = room.getTrader1();
         }
         
-        player.sendMessage("§8================================");
+        final Player otherPlayer = other == null ? null : this.server.getPlayer(other.getUniqueId());
+        
+        if (other == null) {
+            player.sendMessage("§aYou have started a trade.");
+            player.sendMessage("§6When another player joins your trade, you can begin adding your items to the chest.");
+            room.setStatus(TradeStatus.WAIT);
+        } else if (otherPlayer == null || !otherPlayer.isOnline()) {
+            
+            if (!other.isOffline()) {
+                other.setOffline(true);
+            }
+            room.setStatus(TradeStatus.PREPARE);
+            
+            player.sendMessage("§aYou have started a trade with " + other.getName() + ".");
+            player.sendMessage("§6They are currently offline currently. You can begin putting items in your chest when they log back in.");
+            player.sendMessage("§6If they do not log in with in the next " + this.formatTime(other.getLogoutTime()) + ", the trade will be automatically cancelled.");
+            
+        } else {
+            
+            if (other.isOffline()) {
+                other.setOffline(false);
+            }
+            room.setStatus(TradeStatus.PREPARE);
+            
+            player.sendMessage("§aYou have started a trade with " + other.getName() + ".");
+            player.sendMessage("§aYou may begin adding items to the chest.");
+            otherPlayer.sendMessage("§a" + self.getName() + " has started trading with you.");
+            otherPlayer.sendMessage("§aYou may now begin adding items to the chest.");
+            
+        }
+        
+        this.saveRoom(player, room);
     }
     
-    /*public void infoChest(@NotNull final Player sender, @NotNull final String name) {
+    public void acceptTrade(@NotNull final Player player, @NotNull final TradeRoom room, @NotNull final Side otherSide, @NotNull final Trader self, @NotNull final Trader other) {
         
-        final TradeRoom room = this.byName.get(name);
-        if (room == null) {
-            sender.sendMessage("§cThe TradeChest§r §6" + name + "§r §cdoes not exist. Please verify that you spelled the name correctly.");
-            return;
-        }
-        
-        final Location location = room.getChest().getLocation();
-        ActiveTrade activeTrade = null;
-        for (final ActiveTrade checkTrade : this.activeTrades.values()) {
-            if (checkTrade.getRoom().equals(room)) {
-                activeTrade = checkTrade;
-                break;
-            }
-        }
-        
-        final TradeChest linkedChest = this.pairings.get(room);
-        ActiveTrade linkedTrade = null;
-        if (linkedChest != null) {
-            for (final ActiveTrade checkTrade : this.activeTrades.values()) {
-                if (checkTrade.getRoom().equals(linkedChest)) {
-                    linkedTrade = checkTrade;
-                    break;
-                }
-            }
-        }
-        
-        sender.sendMessage("§8================================");
-        
-        sender.sendMessage("§fName:§r §6" + room.getName());
-        
-        sender.sendMessage("§8--------------------------------");
-        
-        sender.sendMessage("§fWorld:§r §b" + location.getWorld().getName());
-        sender.sendMessage("§fX-Coord:§r §b" + location.getBlockX());
-        sender.sendMessage("§fY-Coord:§r §b" + location.getBlockY());
-        sender.sendMessage("§fZ-Coord:§r §b" + location.getBlockZ());
-        
-        sender.sendMessage("§8--------------------------------");
-        
-        sender.sendMessage("§fIs Linked:§r §" + (linkedChest == null ? "cNo" : "aYes"));
-        if (linkedChest != null) {
-            sender.sendMessage("§fLinked Chest:§r §b" + linkedChest.getName());
-        }
-        
-        sender.sendMessage("§8--------------------------------");
-        
-        sender.sendMessage("§fIs in Active Trade:§r §" + (activeTrade == null ? "cNo" : "aYes"));
-        if (activeTrade != null) {
-            sender.sendMessage("§fPlayer Name:§r §b" + activeTrade.getName());
-            sender.sendMessage("§fPlayer UUID:§r §b" + activeTrade.getUniqueId().toString());
-            sender.sendMessage("§fTrade Status:§r §b" + activeTrade.getStatus().name());
-        }
-        
-        sender.sendMessage("§8--------------------------------");
-        
-        if (linkedChest != null) {
-            sender.sendMessage("§fLinked TradeChest is in Active Trade:§r §" + (linkedTrade == null ? "cNo" : "aYes"));
-            if (linkedTrade != null) {
-                sender.sendMessage("§fLinked Player Name:§r §b" + linkedTrade.getName());
-                sender.sendMessage("§fLinked Player UUID:§r §b" + linkedTrade.getUniqueId().toString());
-                sender.sendMessage("§fLinked Trade Status:§r §b" + linkedTrade.getStatus().name());
-            }
-        }
-        
-        sender.sendMessage("§8================================");
-    }*/
-    
-    private void startTrade(@NotNull final Player player, @NotNull final TradeRoom room) {
-        
-        final UUID uniqueId = player.getUniqueId();
-        final TradeRoom linkedRoom = this.pairings.get(room);
-        if (linkedRoom == null) {
-            
-            player.sendMessage("§cThe trade room that you selected is not linked to another trade room. Please report this to the server administrators.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE STARTING A TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + uniqueId.toString());
-            this.logger.log(Level.WARNING, "Trade Room: " + room.getName());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to start a trade.");
-            this.logger.log(Level.WARNING, "No linked trade room to the one listed above.");
-            return;
-        }
-        
-        for (final ActiveTrade check : this.activeTrades.values()) {
-            if (check.getRoom().equals(room)) {
-                player.sendMessage("§cThe trade room you selected is already in use in another trade. Please pick a different room to use.");
-                return;
-            }
-        }
-        
-        ActiveTrade linkedTrade = null;
-        for (final ActiveTrade check : this.activeTrades.values()) {
-            if (check.getRoom().equals(linkedRoom)) {
-                linkedTrade = check;
-                break;
-            }
-        }
-        
-        if (linkedTrade == null) {
-            
-            player.teleport(room.getTeleportIn1());
-            player.sendMessage("§6Waiting for the other player to begin the trade...");
-            player.sendMessage("§aYou may begin placing the items you wish to trade into the chest.");
-            
-            final ActiveTrade activeTrade = new ActiveTrade(player, room);
-            this.activeTrades.put(uniqueId, activeTrade);
-            this.saveActiveTrade(player, activeTrade);
-            
-            return;
-        }
-        
-        final UUID linkedUniqueId = linkedTrade.getUniqueId1();
-        final Player linkedPlayer = this.getServer().getPlayer(linkedUniqueId);
-        if (linkedPlayer != null && linkedPlayer.isOnline()) {
-            
-            final ActiveTrade activeTrade = new ActiveTrade(player, room);
-            this.activeTrades.put(uniqueId, activeTrade);
-            this.saveActiveTrade(player, activeTrade);
-            
-            player.teleport(room.getTeleportIn1());
-            player.sendMessage("§aYou are trading with§r §6" + linkedPlayer.getName() + "§r§a.");
-            player.sendMessage("§aYou may begin placing the items you wish to trade into the chest.");
-            linkedPlayer.sendMessage("§aYou are now trading with§r §6" + player.getName() + "§r§a.");
-            return;
-        }
-        
-        OfflineTrader linkedOfflineTrader = this.offlineTraders.get(linkedUniqueId);
-        if (linkedOfflineTrader == null) {
-            
-            player.sendMessage("§cThere was an error starting your trade. Please report this to a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE STARTING A TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + uniqueId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-            this.logger.log(Level.WARNING, "Linked TradeChest: " + linkedRoom.getName());
-            this.logger.log(Level.WARNING, "Other Player Name: " + linkedTrade.getName1());
-            this.logger.log(Level.WARNING, "Other Player UUID: " + linkedUniqueId.toString());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to start a trade.");
-            this.logger.log(Level.WARNING, "Other player is not online, has an ActiveTrade, but does not have an OfflineTrader object.");
-            
-            this.itemTransfer(player, room.getChest1().getInventory());
-            player.sendMessage("§cYour trade has been automatically cancelled. Any items you put in the chest have been automatically returned to you.");
-            
-            final long now = System.currentTimeMillis();
-            long logoutTime = now - TradePlugin.OFFLINE_TIMEOUT;
-            if (logoutTime < this.serverStart) {
-                final long diff = now - this.serverStart;
-                logoutTime = this.serverStop - (TradePlugin.OFFLINE_TIMEOUT - diff);
-            }
-            
-            linkedOfflineTrader = new OfflineTrader(linkedUniqueId, linkedTrade.getName1(), logoutTime);
-            linkedOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
-            linkedOfflineTrader.setInventory(linkedRoom.getChest1().getInventory());
-            this.offlineTraders.put(linkedUniqueId, linkedOfflineTrader);
-            this.saveOfflineTrader(this.console, linkedOfflineTrader);
-            
-            this.activeTrades.remove(linkedUniqueId);
-            this.deleteActiveTrade(this.console, linkedTrade);
-            linkedRoom.getChest1().getInventory().clear();
-            this.deleteChestInventories(this.console, linkedRoom);
-            return;
-        }
-        
-        final ActiveTrade activeTrade = new ActiveTrade(player, room);
-        this.activeTrades.put(uniqueId, activeTrade);
-        this.saveActiveTrade(player, activeTrade);
-        
-        player.sendMessage("§6You are trading with§r §b" + linkedOfflineTrader.getName() + "§r§6; Please note that they are offline currently.");
-        player.sendMessage("§6If they do not log in within the next§r §b" + this.formatTime(linkedOfflineTrader.getLogoutTime()) + "§r§6, the trade will automatically be cancelled.");
-        player.sendMessage("§aYou may begin placing the items you wish to trade into the chest.");
-    }
-    
-    public void cancelTrade(@NotNull final Player player, final boolean cancel) {
-        
-        final UUID playerId = player.getUniqueId();
-        final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-        if (activeTrade == null) {
-            player.sendMessage("§cYou are not currently in a trade with anyone.");
-            return;
-        }
-        
-        final TradeRoom room = activeTrade.getRoom();
-        final TradeRoom linkedRoom = this.pairings.get(room);
-        if (linkedRoom == null) {
-            
-            player.sendMessage("§cThere was an error while " + (cancel ? "cancelling" : "rejecting") + " your trade, please report this to a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE CANCELLING/REJECTING A TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-            this.logger.log(Level.WARNING, "Configured Linked TradeChest: " + room.getLinked());
-            this.logger.log(Level.WARNING, "Cancel/Reject: " + (cancel ? "CANCEL" : "REJECT"));
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to cancel a trade.");
-            this.logger.log(Level.WARNING, "No linked TradeChest to the one listed above.");
-            return;
-        }
-        
-        ActiveTrade linkedTrade = null;
-        for (final ActiveTrade checkTrade : this.activeTrades.values()) {
-            if (checkTrade.getRoom().equals(linkedRoom)) {
-                linkedTrade = checkTrade;
-                break;
-            }
-        }
-        
-        if (linkedTrade == null) {
-            
-            this.itemTransfer(player, room.getChest1().getInventory());
-            if (this.tradeInventories.containsKey(playerId)) {
-                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                    player.closeInventory();
-                }
-                this.tradeInventories.remove(playerId);
-            }
-            
-            this.activeTrades.remove(playerId);
-            this.deleteActiveTrade(player, activeTrade);
-            this.deleteChestInventories(player, room);
-            player.sendMessage("§aYour trade has been " + (cancel ? "cancelled" : "rejected") + ". Any items you put in the chest have been automatically returned to you.");
-            return;
-        }
-        
-        final UUID otherPlayerId = linkedTrade.getUniqueId1();
-        final Player otherPlayer = this.getServer().getPlayer(otherPlayerId);
+        final Player otherPlayer = this.server.getPlayer(other.getUniqueId());
         if (otherPlayer != null && otherPlayer.isOnline()) {
             
-            this.itemTransfer(player, room.getChest1().getInventory());
-            if (this.tradeInventories.containsKey(playerId)) {
-                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                    player.closeInventory();
-                }
-                this.tradeInventories.remove(playerId);
+            if (other.isOffline()) {
+                other.setOffline(false);
             }
             
-            this.activeTrades.remove(playerId);
-            this.deleteActiveTrade(player, activeTrade);
-            this.deleteChestInventories(player, room);
-            player.sendMessage("§aYour trade has been " + (cancel ? "cancelled" : "rejected") + ". Any items you put in the chest have been automatically returned to you.");
-    
-            this.itemTransfer(otherPlayer, linkedRoom.getChest1().getInventory());
-            if (this.tradeInventories.containsKey(otherPlayerId)) {
-                if (this.checkInventories(otherPlayer.getOpenInventory().getTopInventory(), this.tradeInventories.get(otherPlayerId))) {
-                    otherPlayer.closeInventory();
-                }
-                this.tradeInventories.remove(otherPlayerId);
-            }
-            
-            this.activeTrades.remove(otherPlayerId);
-            this.deleteActiveTrade(otherPlayer, linkedTrade);
-            this.deleteChestInventories(otherPlayer, linkedRoom);
-            otherPlayer.sendMessage("§cYour trade has been " + (cancel ? "cancelled" : "rejected" ) + " by§r §6" + player.getName() + "§r§c. Any items you put in the chest have been automatically returned to you.");
-            return;
-        }
-        
-        OfflineTrader otherOfflineTrader = this.offlineTraders.get(otherPlayerId);
-        if (otherOfflineTrader == null) {
-            
-            player.sendMessage("§cThere was an error while cancelling the trade with the other player. Please report this to a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE CANCELLING/REJECTING A TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-            this.logger.log(Level.WARNING, "Linked TradeChest: " + linkedRoom.getName());
-            this.logger.log(Level.WARNING, "Other Player Name: " + linkedTrade.getName1());
-            this.logger.log(Level.WARNING, "Other Player UUID: " + otherPlayerId.toString());
-            this.logger.log(Level.WARNING, "Cancel/Reject: " + (cancel ? "CANCEL" : "REJECT"));
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to cancel a trade.");
-            this.logger.log(Level.WARNING, "Other player is not online, has an ActiveTrade, but does not have an OfflineTrader object.");
-            
-            final long now = System.currentTimeMillis();
-            long logoutTime = now - TradePlugin.OFFLINE_TIMEOUT;
-            if (logoutTime < this.serverStart) {
-                final long diff = now - this.serverStart;
-                logoutTime = this.serverStop - (TradePlugin.OFFLINE_TIMEOUT - diff);
-            }
-            
-            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName1(), logoutTime);
-            otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
-        } else {
-            otherOfflineTrader.setCompleteReason(cancel ? OfflineTrader.CompleteReason.CANCELLED : OfflineTrader.CompleteReason.REJECTED);
-        }
-        
-        this.itemTransfer(player, room.getChest1().getInventory());
-        if (this.tradeInventories.containsKey(playerId)) {
-            if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                player.closeInventory();
-            }
-            this.tradeInventories.remove(playerId);
-        }
-        
-        this.activeTrades.remove(playerId);
-        this.deleteActiveTrade(player, activeTrade);
-        this.deleteChestInventories(player, room);
-        player.sendMessage("§cYour trade has been " + (cancel ? "cancelled" : "rejected") + ". Any items you put in the chest have been automatically returned to you.");
-        
-        otherOfflineTrader.setInventory(linkedRoom.getChest1().getInventory());
-        this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
-        this.saveOfflineTrader(this.console, otherOfflineTrader);
-        
-        this.tradeInventories.remove(otherPlayerId);
-        this.activeTrades.remove(otherPlayerId);
-        this.deleteActiveTrade(this.console, linkedTrade);
-        linkedRoom.getChest1().getInventory().clear();
-        this.deleteChestInventories(this.console, linkedRoom);
-    }
-    
-    public void readyTrade(@NotNull final Player player) {
-        
-        final UUID playerId = player.getUniqueId();
-        final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-        if (activeTrade == null) {
-            player.sendMessage("§cYou are not currently in a trade with anyone.");
-            return;
-        }
-        
-        if (activeTrade.getStatus().ordinal() >= ActiveTrade.TradeStatus.LOCKED.ordinal()) {
-            player.sendMessage("§6You have already marked yourself as ready to trade.");
-            player.sendMessage("§6If you need to change your trade items, please cancel and re-start your trade.");
-            return;
-        }
-        
-        final TradeRoom room = activeTrade.getRoom();
-        final TradeRoom linkedRoom = this.pairings.get(room);
-        if (linkedRoom == null) {
-            
-            player.sendMessage("§cThere was an error while marking your trade as ready. Please report this to a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE MARKING TRADE AS READY");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-            this.logger.log(Level.WARNING, "Configured Linked TradeChest: " + activeTrade.getRoom().getLinked());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to mark themselves as ready for a trade.");
-            this.logger.log(Level.WARNING, "No linked TradeChest to the one listed above.");
-            return;
-        }
-        
-        final ItemStack[] items = room.getChest1().getInventory().getStorageContents();
-        this.saveChestInventories(player, room);
-        
-        activeTrade.setStatus(ActiveTrade.TradeStatus.LOCKED);
-        this.saveActiveTrade(player, activeTrade);
-        this.activeTrades.put(playerId, activeTrade);
-        player.sendMessage("§aYou have marked yourself as ready to trade.");
-        
-        ActiveTrade linkedTrade = null;
-        for (final ActiveTrade checkTrade : this.activeTrades.values()) {
-            if (checkTrade.getRoom().equals(linkedRoom)) {
-                linkedTrade = checkTrade;
-                break;
-            }
-        }
-        
-        if (linkedTrade == null) {
-            player.sendMessage("§6Please wait for the other player to begin their trade...");
-            return;
-        }
-        
-        final UUID otherPlayerId = linkedTrade.getUniqueId1();
-        final Player otherPlayer = this.getServer().getPlayer(otherPlayerId);
-        if (otherPlayer == null || !otherPlayer.isOnline()) {
-            player.sendMessage("§6Please wait for the other player (§r§b" + linkedTrade.getName1() + "§r§6), they are currently offline.");
-            return;
-        }
-        
-        
-        if (linkedTrade.getStatus().ordinal() < ActiveTrade.TradeStatus.LOCKED.ordinal()) {
-            player.sendMessage("§6Please wait, " + otherPlayer.getName() + " is finishing preparing their trade.");
-            otherPlayer.sendMessage("§6" + player.getName() + " is ready to trade.");
-            return;
-        }
-        
-        activeTrade.setStatus(ActiveTrade.TradeStatus.DECIDE);
-        linkedTrade.setStatus(ActiveTrade.TradeStatus.DECIDE);
-        this.saveActiveTrade(player, activeTrade);
-        this.saveActiveTrade(otherPlayer, linkedTrade);
-        this.activeTrades.put(playerId, activeTrade);
-        this.activeTrades.put(otherPlayerId, linkedTrade);
-        
-        player.sendMessage("§a" + otherPlayer.getName() + " is also ready to trade. Trade starting...");
-        otherPlayer.sendMessage("§a" + player.getName() + " is ready to trade now. Trade starting...");
-        
-        final Inventory senderTradeInventory = this.createTradeInventory(activeTrade.getRoom().getChest1().getInventory());
-        final Inventory otherTradeInventory = this.createTradeInventory(linkedTrade.getRoom().getChest1().getInventory());
-        
-        player.openInventory(otherTradeInventory);
-        otherPlayer.openInventory(senderTradeInventory);
-        
-        this.tradeInventories.put(playerId, otherTradeInventory);
-        this.tradeInventories.put(otherPlayerId, senderTradeInventory);
-    }
-    
-    public void viewTrade(@NotNull final Player player) {
-        
-        final UUID playerId = player.getUniqueId();
-        final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-        if (activeTrade == null) {
-            player.sendMessage("§cYou are not currently in a trade with anyone.");
-            return;
-        }
-        
-        switch (activeTrade.getStatus()) {
-            case PREPARE:
-                player.sendMessage("§cYou cannot view the other player's items; you have not decided what items you want to trade yet.");
-                return;
-            case LOCKED:
-                player.sendMessage("§cYou cannot view the other player's items; the player trading with you has not yet finished deciding what items they want to trade.");
-                return;
-            case DECIDE:
-                break;
-            case ACCEPT:
-                player.sendMessage("§cYou cannot view the other player's items; you have already accepted the trade.");
-                return;
-            default:
-                player.sendMessage("§cAn error has occurred while viewing the other player's items. Please send this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE VIEWING TRADE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-                this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-                this.logger.log(Level.WARNING, "TradeChest: " + activeTrade.getRoom().getName());
-                this.logger.log(Level.WARNING, "Trade Status: " + activeTrade.getStatus().name());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to view a trade.");
-                this.logger.log(Level.WARNING, "Player matched default case on TradeStatus during trade viewing, meaning they do not have a valid TradeStatus.");
-                return;
-        }
-        
-        final Inventory tradeInventory = this.tradeInventories.get(playerId);
-        if (tradeInventory == null) {
-            player.sendMessage("§cAn error occurred while viewing the other player's items. Please send this error to a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE VIEWING TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + activeTrade.getRoom().getName());
-            this.logger.log(Level.WARNING, "Trade Status: " + activeTrade.getStatus().name());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to view a trade.");
-            this.logger.log(Level.WARNING, "Player is in the DECIDE phase, but does not have a trade Inventory available.");
-            return;
-        }
-        
-        if (!this.checkInventories(player.getOpenInventory().getTopInventory(), tradeInventory)) {
-            player.closeInventory();
-            player.openInventory(tradeInventory);
-        }
-    }
-    
-    public void acceptTrade(@NotNull final Player player) {
-        
-        final UUID playerId = player.getUniqueId();
-        final ActiveTrade activeTrade = this.activeTrades.get(playerId);
-        if (activeTrade == null) {
-            player.sendMessage("§cYou are not currently in a trade with anyone.");
-            return;
-        }
-        
-        switch (activeTrade.getStatus()) {
-            case PREPARE:
-                player.sendMessage("§cYou cannot accept a trade; you have not decided what items you want to trade yet.");
-                return;
-            case LOCKED:
-                player.sendMessage("§cThe player trading with you has not yet finished deciding what items they want to trade.");
-                return;
-            case DECIDE:
-                break;
-            case ACCEPT:
-                player.sendMessage("§cYou have already accepted the trade, please wait for the other person to decide.");
-                return;
-            default:
-                player.sendMessage("§cAn error has occurred while accepting your trade. Please send this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE ACCEPTING TRADE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-                this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-                this.logger.log(Level.WARNING, "TradeChest: " + activeTrade.getRoom().getName());
-                this.logger.log(Level.WARNING, "Trade Status: " + activeTrade.getStatus().name());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to accept a trade.");
-                this.logger.log(Level.WARNING, "Player matched default case on TradeStatus during trade acceptance, meaning they do not have a valid TradeStatus.");
-                return;
-        }
-        
-        final TradeRoom room = activeTrade.getRoom();
-        final TradeRoom linkedRoom = this.pairings.get(room);
-        if (linkedRoom == null) {
-            player.sendMessage("§cThere was an error while accepting your trade. Please notify a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE ACCEPTING TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-            this.logger.log(Level.WARNING, "Configured Linked TradeChest: " + room.getLinked());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to accept a trade.");
-            this.logger.log(Level.WARNING, "No linked TradeChest to the one listed above.");
-            return;
-        }
-        
-        ActiveTrade linkedTrade = null;
-        for (final ActiveTrade checkTrade : this.activeTrades.values()) {
-            if (checkTrade.getRoom().equals(linkedRoom)) {
-                linkedTrade = checkTrade;
-                break;
-            }
-        }
-        
-        if (linkedTrade == null) {
-            player.sendMessage("§cThere was an error while accepting your trade. Please notify a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE ACCEPTING TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "Trade Chest: " + room.getName());
-            this.logger.log(Level.WARNING, "Linked Chest: " + linkedRoom.getName());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to accept a trade.");
-            this.logger.log(Level.WARNING, "No ActiveTrade for the linked TradeChest, this TradeStatus should not be possible without another ActiveTrade.");
-            return;
-        }
-        
-        player.sendMessage("§aYou have accepted the trade.");
-        if (linkedTrade.getStatus() != ActiveTrade.TradeStatus.ACCEPT) {
-            
-            if (this.tradeInventories.containsKey(playerId)) {
-                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                    player.closeInventory();
-                }
-            }
-            
-            activeTrade.setStatus(ActiveTrade.TradeStatus.ACCEPT);
-            this.saveActiveTrade(player, activeTrade);
-            this.activeTrades.put(playerId, activeTrade);
-            
-            player.sendMessage("§6You are waiting on the other player to make a decision. Please continue to wait...");
-            return;
-        }
-        
-        final UUID otherPlayerId = linkedTrade.getUniqueId1();
-        final Player otherPlayer = this.getServer().getPlayer(otherPlayerId);
-        if (otherPlayer != null && otherPlayer.isOnline()) {
-            
-            otherPlayer.sendMessage("§aThe other person has accepted the trade.");
+            otherPlayer.sendMessage("§a" + self.getName() + " has accepted the trade.");
             player.sendMessage("§aSwapping items...");
             otherPlayer.sendMessage("§aSwapping items...");
             
-            this.itemTransfer(player, linkedRoom.getChest1().getInventory());
-            if (this.tradeInventories.containsKey(playerId)) {
-                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
+            room.swapItems(player, otherPlayer);
+            room.setStatus(TradeStatus.COMPLETE);
+            this.saveRoom(player, room);
+            this.deleteChestInventories(player, room);
+            
+            if (this.tradeInventories.containsKey(self.getUniqueId())) {
+                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.remove(self.getUniqueId()))) {
                     player.closeInventory();
                 }
-                this.tradeInventories.remove(playerId);
             }
-            
-            this.itemTransfer(otherPlayer, room.getChest1().getInventory());
-            if (this.tradeInventories.containsKey(otherPlayerId)) {
-                if (this.checkInventories(otherPlayer.getOpenInventory().getTopInventory(), this.tradeInventories.get(otherPlayerId))) {
+            if (this.tradeInventories.containsKey(other.getUniqueId())) {
+                if (this.checkInventories(otherPlayer.getOpenInventory().getTopInventory(), this.tradeInventories.remove(other.getUniqueId()))) {
                     otherPlayer.closeInventory();
                 }
-                this.tradeInventories.remove(otherPlayerId);
             }
             
-            this.activeTrades.remove(playerId);
-            this.deleteActiveTrade(player, activeTrade);
-            this.deleteChestInventories(player, room);
-            
-            this.activeTrades.remove(otherPlayerId);
-            this.deleteActiveTrade(otherPlayer, linkedTrade);
-            this.deleteChestInventories(otherPlayer, linkedRoom);
-            
-            player.sendMessage("§aTrade complete!");
-            otherPlayer.sendMessage("§aTrade complete!");
             return;
         }
         
-        OfflineTrader otherOfflineTrader = this.offlineTraders.get(otherPlayerId);
-        if (otherOfflineTrader == null) {
-            
-            player.sendMessage("§cThere was an error accepting your trade. Please report this to a server administrator.");
-            this.logger.log(Level.WARNING, "ISSUE WHILE ACCEPTING A TRADE");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
-            this.logger.log(Level.WARNING, "Player UUID: " + playerId.toString());
-            this.logger.log(Level.WARNING, "TradeChest: " + room.getName());
-            this.logger.log(Level.WARNING, "Linked TradeChest: " + linkedRoom.getName());
-            this.logger.log(Level.WARNING, "Other Player Name: " + linkedTrade.getName1());
-            this.logger.log(Level.WARNING, "Other Player UUID: " + otherPlayerId.toString());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + player.getName() + " is attempting to accept a trade.");
-            this.logger.log(Level.WARNING, "Other player is not online, has an ActiveTrade, but does not have an OfflineTrader object.");
-            
-            this.itemTransfer(player, room.getChest1().getInventory());
-            if (this.tradeInventories.containsKey(playerId)) {
-                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                    player.closeInventory();
-                }
-                this.tradeInventories.remove(playerId);
-            }
-            
-            this.activeTrades.remove(playerId);
-            this.deleteActiveTrade(player, activeTrade);
-            this.deleteChestInventories(player, room);
-            player.sendMessage("§cYour trade has been automatically cancelled. Any items you put in the chest have been automatically returned to you.");
-            
-            final long now = System.currentTimeMillis();
-            long logoutTime = now - TradePlugin.OFFLINE_TIMEOUT;
-            if (logoutTime < this.serverStart) {
-                final long diff = now - this.serverStart;
-                logoutTime = this.serverStop - (TradePlugin.OFFLINE_TIMEOUT - diff);
-            }
-            
-            otherOfflineTrader = new OfflineTrader(otherPlayerId, linkedTrade.getName1(), logoutTime);
-            otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ERROR);
-            otherOfflineTrader.setInventory(linkedRoom.getChest1().getInventory());
-            this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
-            this.saveOfflineTrader(this.console, otherOfflineTrader);
-            
-            this.tradeInventories.remove(otherPlayerId);
-            this.activeTrades.remove(otherPlayerId);
-            this.deleteActiveTrade(this.console, linkedTrade);
-            linkedRoom.getChest1().getInventory().clear();
-            this.deleteChestInventories(this.console, linkedRoom);
-            return;
-        }
-        
-        player.sendMessage("§aThe other player has accepted the trade before they went offline.");
+        player.sendMessage("§a" + other.getName() + " has accepted the trade before they went offline.");
         player.sendMessage("§aSwapping items...");
         
-        this.itemTransfer(player, linkedRoom.getChest1().getInventory());
-        if (this.tradeInventories.containsKey(playerId)) {
-            if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.get(playerId))) {
-                player.closeInventory();
-            }
-            this.tradeInventories.remove(playerId);
+        final Offline offline = new Offline(other);
+        offline.setReason(CompleteReason.ACCEPTED);
+        
+        final Inventory extraOther = room.swapItems(player, offline);
+        room.setStatus(TradeStatus.COMPLETE);
+        
+        if (otherSide == Side.SIDE_1) {
+            offline.setTeleport(room.getTeleportOut1());
+            room.setTrader1(null);
+        } else {
+            offline.setTeleport(room.getTeleportOut2());
+            room.setTrader2(null);
         }
         
-        player.sendMessage("§aTrade complete!");
-        
-        otherOfflineTrader.setCompleteReason(OfflineTrader.CompleteReason.ACCEPTED);
-        otherOfflineTrader.setInventory(room.getChest1().getInventory());
-        this.offlineTraders.put(otherPlayerId, otherOfflineTrader);
-        this.saveOfflineTrader(this.console, otherOfflineTrader);
-        
-        this.activeTrades.remove(playerId);
-        this.deleteActiveTrade(player, activeTrade);
+        this.saveRoom(player, room);
         this.deleteChestInventories(player, room);
         
-        this.tradeInventories.remove(otherPlayerId);
-        this.activeTrades.remove(otherPlayerId);
-        this.deleteActiveTrade(this.console, linkedTrade);
-        linkedRoom.getChest1().getInventory().clear();
-        this.deleteChestInventories(this.console, linkedRoom);
-    }
-    
-    @NotNull
-    public List<String> getNotLinked(@Nullable final String name) {
+        this.offlines.put(offline.getUniqueId(), offline);
+        this.saveOffline(offline, extraOther);
         
-        final List<String> notLinked = new ArrayList<String>();
-        for (final TradeRoom room : this.byName.values()) {
-            if (this.pairings.get(room) == null && (name == null || !name.equalsIgnoreCase(room.getName()))) {
-                notLinked.add(room.getName());
+        if (this.tradeInventories.containsKey(self.getUniqueId())) {
+            if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.remove(self.getUniqueId()))) {
+                player.closeInventory();
             }
         }
-        
-        return notLinked;
+        this.tradeInventories.remove(offline.getUniqueId());
     }
     
-    @NotNull
-    public List<String> getLinked() {
+    public void rejectTrade(@NotNull final Player player, @NotNull final TradeRoom room, @NotNull final Side otherSide, @NotNull final Trader self, @NotNull final Trader other) {
         
-        final List<String> linked = new ArrayList<String>();
-        for (final TradeRoom room : this.byName.values()) {
-            if (this.pairings.get(room) != null) {
-                linked.add(room.getName());
+        final Player otherPlayer = this.server.getPlayer(other.getUniqueId());
+        if (otherPlayer != null && otherPlayer.isOnline()) {
+            
+            if (other.isOffline()) {
+                other.setOffline(false);
             }
-        }
-        
-        return linked;
-    }
-    
-    @NotNull
-    public List<String> getNotInActiveTrade(final boolean linkedRequired) {
-        
-        final List<TradeRoom> inActiveTrade = new ArrayList<TradeRoom>();
-        for (final ActiveTrade activeTrade : this.activeTrades.values()) {
-            inActiveTrade.add(activeTrade.getRoom());
-        }
-    
-        final List<String> notInActiveTrade = new ArrayList<String>();
-        for (final TradeRoom room : this.byName.values()) {
-            if (!inActiveTrade.contains(room)) {
-                if (!linkedRequired) {
-                    notInActiveTrade.add(room.getName());
-                } else if (this.pairings.get(room) != null) {
-                    notInActiveTrade.add(room.getName());
+            
+            otherPlayer.sendMessage("§c" + self.getName() + " has rejected the trade.");
+            player.sendMessage("§6Returning items...");
+            otherPlayer.sendMessage("§6Returning items...");
+            
+            room.returnItems(player, otherPlayer);
+            room.setStatus(TradeStatus.COMPLETE);
+            this.saveRoom(player, room);
+            this.deleteChestInventories(player, room);
+            
+            if (this.tradeInventories.containsKey(self.getUniqueId())) {
+                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.remove(self.getUniqueId()))) {
+                    player.closeInventory();
                 }
             }
+            if (this.tradeInventories.containsKey(other.getUniqueId())) {
+                if (this.checkInventories(otherPlayer.getOpenInventory().getTopInventory(), this.tradeInventories.remove(other.getUniqueId()))) {
+                    otherPlayer.closeInventory();
+                }
+            }
+            
+            return;
         }
         
-        return notInActiveTrade;
+        player.sendMessage("§6" + other.getName() + " will be notified that the trade was rejected when the next log in.");
+        player.sendMessage("§6Returning items...");
+        
+        final Offline offline = new Offline(other);
+        offline.setReason(CompleteReason.REJECTED);
+        
+        final Inventory extra = room.returnItems(player, offline);
+        room.setStatus(TradeStatus.COMPLETE);
+        
+        if (otherSide == Side.SIDE_1) {
+            offline.setTeleport(room.getTeleportOut1());
+            room.setTrader1(null);
+        } else {
+            offline.setTeleport(room.getTeleportOut2());
+            room.setTrader2(null);
+        }
+        
+        this.saveRoom(player, room);
+        this.deleteChestInventories(player, room);
+        
+        this.offlines.put(offline.getUniqueId(), offline);
+        this.saveOffline(offline, extra);
+        
+        if (this.tradeInventories.containsKey(self.getUniqueId())) {
+            if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.remove(self.getUniqueId()))) {
+                player.closeInventory();
+            }
+        }
+        this.tradeInventories.remove(offline.getUniqueId());
     }
     
-    @NotNull
-    public List<String> getAll() {
-        return new ArrayList<String>(this.byName.keySet());
+    public void cancelTrade(@NotNull final Player player, @NotNull final TradeRoom room, @NotNull final Side otherSide, @NotNull final Trader self, @Nullable final Trader other) {
+        
+        final Player otherPlayer = other == null ? null : this.server.getPlayer(other.getUniqueId());
+        if (otherPlayer != null && otherPlayer.isOnline()) {
+            
+            if (other.isOffline()) {
+                other.setOffline(false);
+            }
+            
+            otherPlayer.sendMessage("§c" + self.getName() + " has cancelled the trade.");
+            player.sendMessage("§6Returning items...");
+            otherPlayer.sendMessage("§6Returning items...");
+            
+            room.returnItems(player, otherPlayer);
+            room.setStatus(TradeStatus.COMPLETE);
+            this.saveRoom(player, room);
+            this.deleteChestInventories(player, room);
+            
+            if (this.tradeInventories.containsKey(self.getUniqueId())) {
+                if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.remove(self.getUniqueId()))) {
+                    player.closeInventory();
+                }
+            }
+            if (this.tradeInventories.containsKey(other.getUniqueId())) {
+                if (this.checkInventories(otherPlayer.getOpenInventory().getTopInventory(), this.tradeInventories.remove(other.getUniqueId()))) {
+                    otherPlayer.closeInventory();
+                }
+            }
+            
+            return;
+        }
+        
+        if (other != null) {
+            player.sendMessage("§6" + other.getName() + " will be notified that the trade was cancelled when the next log in.");
+        }
+        player.sendMessage("§6Returning items...");
+        
+        final Offline offline = other == null ? null : new Offline(other);
+        if (offline != null) {
+            offline.setReason(CompleteReason.CANCELLED);
+        }
+        
+        final Inventory extraOther = room.returnItems(player, offline);
+        room.setStatus(TradeStatus.COMPLETE);
+        
+        if (offline != null) {
+            if (otherSide == Side.SIDE_1) {
+                offline.setTeleport(room.getTeleportOut1());
+                room.setTrader1(null);
+            } else {
+                offline.setTeleport(room.getTeleportOut2());
+                room.setTrader2(null);
+            }
+        }
+        
+        this.saveRoom(player, room);
+        this.deleteChestInventories(player, room);
+        
+        if (offline != null) {
+            this.offlines.put(offline.getUniqueId(), offline);
+        }
+        this.saveOffline(offline, extraOther);
+        
+        if (this.tradeInventories.containsKey(self.getUniqueId())) {
+            if (this.checkInventories(player.getOpenInventory().getTopInventory(), this.tradeInventories.remove(self.getUniqueId()))) {
+                player.closeInventory();
+            }
+        }
+        if (offline != null) {
+            this.tradeInventories.remove(offline.getUniqueId());
+        }
     }
     
     ////////////////////
     // HELPER METHODS //
     ////////////////////
     
-    private void itemTransfer(@NotNull final Player player, @NotNull final Inventory chestInventory) {
+    private void displayNewTrade(@NotNull final Player player, @NotNull final Location location, @NotNull final TradeRoom room, @NotNull final TradeStatus status, @NotNull final Trader self, @NotNull final Trader other) {
         
-        final Inventory playerInventory = player.getInventory();
-        final ItemStack[] chestContents = chestInventory.getStorageContents();
-        final ItemStack[] playerContents = playerInventory.getStorageContents();
+        final Player otherPlayer = this.server.getPlayer(other.getUniqueId());
+        if (otherPlayer == null || !otherPlayer.isOnline()) {
+            player.sendMessage("§6Please wait for " + other.getName() + " to log back in. When they do, the trade screen will open automatically.");
+            return;
+        }
         
-        boolean availableSlot = true;
+        player.sendMessage("§aYou may now decide on the trade.");
+        otherPlayer.sendMessage("§a" + self.getName() + " has finished selecting what they want to trade. You may now decide on the trade.");
         
-        for (int cIndex = 0; cIndex < chestContents.length && availableSlot; cIndex++) {
-            boolean itemMoved = false;
-            final ItemStack chestItem = chestContents[cIndex];
-            if (chestItem == null || chestItem.getType() == Material.AIR) {
+        final Inventory selfInventory = room.createTradeInventory(this.server, self.getUniqueId());
+        if (selfInventory == null) {
+            player.sendMessage("§cAn unknown error occurred while attempting to display your trade inventory. Please report it to the system administrators.");
+            otherPlayer.sendMessage("§cAn unknown error occurred while attempting to display " + self.getName() + "'s trade inventory. Please report it to the system administrators.");
+            this.logger.log(Level.WARNING, "Trade inventory not created for trader 1.");
+            this.logger.log(Level.WARNING, "Trade Room: " + room.getName());
+            this.logger.log(Level.WARNING, "Player UUID: " + player.getUniqueId().toString());
+            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
+            this.logger.log(Level.WARNING, "Activating World: " + (location.getWorld() == null ? "null" : location.getWorld().getName()));
+            this.logger.log(Level.WARNING, "Activating X: " + location.getBlockX());
+            this.logger.log(Level.WARNING, "Activating Y: " + location.getBlockY());
+            this.logger.log(Level.WARNING, "Activating Z: " + location.getBlockZ());
+            this.logger.log(Level.WARNING, "Trade Status: " + status.name());
+            this.logger.log(Level.WARNING, "Trader 1 UUID: " + self.getUniqueId().toString());
+            this.logger.log(Level.WARNING, "Trader 1 Name: " + self.getName());
+            this.logger.log(Level.WARNING, "Trader 2 UUID: " + other.getUniqueId().toString());
+            this.logger.log(Level.WARNING, "Trader 2 Name: " + other.getName());
+            return;
+        }
+        
+        final Inventory otherInventory = room.createTradeInventory(this.server, other.getUniqueId());
+        if (otherInventory == null) {
+            player.sendMessage("§cAn unknown error occurred while attempting to display " + other.getName() + "'s trade inventory. Please report it to the system administrators.");
+            otherPlayer.sendMessage("§cAn unknown error occurred while attempting to display your trade inventory. Please report it to the system administrators.");
+            this.logger.log(Level.WARNING, "Trade inventory not created for trader 2.");
+            this.logger.log(Level.WARNING, "Trade Room: " + room.getName());
+            this.logger.log(Level.WARNING, "Player UUID: " + player.getUniqueId().toString());
+            this.logger.log(Level.WARNING, "Player Name: " + player.getName());
+            this.logger.log(Level.WARNING, "Activating World: " + (location.getWorld() == null ? "null" : location.getWorld().getName()));
+            this.logger.log(Level.WARNING, "Activating X: " + location.getBlockX());
+            this.logger.log(Level.WARNING, "Activating Y: " + location.getBlockY());
+            this.logger.log(Level.WARNING, "Activating Z: " + location.getBlockZ());
+            this.logger.log(Level.WARNING, "Trade Status: " + status.name());
+            this.logger.log(Level.WARNING, "Trader 1 UUID: " + self.getUniqueId().toString());
+            this.logger.log(Level.WARNING, "Trader 1 Name: " + self.getName());
+            this.logger.log(Level.WARNING, "Trader 2 UUID: " + other.getUniqueId().toString());
+            this.logger.log(Level.WARNING, "Trader 2 Name: " + other.getName());
+            return;
+        }
+        
+        player.openInventory(otherInventory);
+        otherPlayer.openInventory(selfInventory);
+        
+        this.tradeInventories.put(self.getUniqueId(), otherInventory);
+        this.tradeInventories.put(other.getUniqueId(), selfInventory);
+    }
+    
+    private void transferItems(@NotNull final Player player, @NotNull final Inventory from, @NotNull final CompleteReason reason) {
+        
+        final Inventory to = player.getInventory();
+        final ItemStack[] toItems = to.getStorageContents();
+        final ItemStack[] fromItems = from.getStorageContents();
+        
+        boolean slotOpen = true;
+        for (int f = 0; f < fromItems.length && slotOpen; f++) {
+            
+            boolean moved = false;
+            ItemStack fromItem = fromItems[f];
+            if (fromItem == null || fromItem.getType() == Material.AIR) {
                 continue;
             }
             
-            for (int pIndex = 0; pIndex < playerContents.length && !itemMoved; pIndex++) {
-                final ItemStack slot = playerContents[pIndex];
+            for (int t = 0; t < toItems.length; t++) {
+                
+                final ItemStack slot = toItems[t];
                 if (slot == null || slot.getType() == Material.AIR) {
-                    playerContents[pIndex] = chestContents[cIndex];
-                    chestContents[cIndex] = null;
-                    itemMoved = true;
+                    continue;
                 }
+                
+                final int available = slot.getMaxStackSize() - slot.getAmount();
+                if (available == 0) {
+                    continue;
+                }
+                
+                if (slot.getType() != fromItem.getType()) {
+                    continue;
+                }
+                
+                if (!slot.getItemMeta().equals(fromItem.getItemMeta())) {
+                    continue;
+                }
+                
+                final int moveable = Math.min(fromItem.getAmount(), available);
+                final int remaining = fromItem.getAmount() - moveable;
+                toItems[t] = new ItemStack(slot.getType(), slot.getAmount() + moveable);
+                
+                if (remaining == 0) {
+                    fromItems[f] = null;
+                    moved = true;
+                    break;
+                }
+                
+                fromItem = new ItemStack(fromItem.getType(), remaining);
+                fromItems[f] = fromItem;
             }
             
-            if (!itemMoved) {
-                availableSlot = false;
+            if (moved) {
+                continue;
+            }
+            
+            for (int t = 0; t < toItems.length && !moved; t++) {
+                
+                final ItemStack slot = toItems[t];
+                if (slot != null && slot.getType() != Material.AIR) {
+                    continue;
+                }
+                
+                toItems[t] = fromItem;
+                fromItems[f] = null;
+                moved = true;
+            }
+            
+            if (!moved) {
+                slotOpen = false;
             }
         }
         
-        player.getInventory().setStorageContents(playerContents);
+        to.setStorageContents(toItems);
         
-        boolean itemsRemaining = false;
-        if (!availableSlot) {
-            for (final ItemStack item : chestContents) {
+        boolean dropRequired = false;
+        if (!slotOpen) {
+            for (final ItemStack item : fromItems) {
                 if (item != null && item.getType() != Material.AIR) {
-                    itemsRemaining = true;
+                    dropRequired = true;
                     break;
                 }
             }
         }
         
-        if (itemsRemaining) {
-            player.sendMessage("§6You did not have enough room in your inventory for everything. Your remaining items have been dropped at your feet.");
-            final World world = player.getLocation().getWorld();
-            final double x = player.getLocation().getBlockX() + 0.5D;
-            final double y = player.getLocation().getBlockY() + 1.0D;
-            final double z = player.getLocation().getBlockZ() + 0.5D;
-            
-            final Location dropLocation = new Location(player.getLocation().getWorld(), x, y, z);
-            for (final ItemStack item : chestContents) {
-                if (item != null && item.getType() != Material.AIR) {
-                    world.dropItemNaturally(dropLocation, item);
-                }
+        if (reason == CompleteReason.ACCEPTED) {
+            player.sendMessage("§aThe items that you received as part of the trade have been placed in your inventory.");
+        } else {
+            player.sendMessage("§cThe items that you placed in the chest have been returned to you.");
+        }
+        
+        if (!dropRequired) {
+            from.setStorageContents(fromItems);
+            return;
+        }
+        
+        player.sendMessage("§6Some of the items could not be put in your inventory. Be sure to pick them up.");
+        final Location location = player.getLocation().add(new Vector(0.0D, 1.0D, 0.0D));
+        final World world = player.getWorld();
+        
+        for (int slot = 0; slot < fromItems.length; slot++) {
+            final ItemStack item = fromItems[slot];
+            if (item != null && item.getType() != Material.AIR) {
+                world.dropItemNaturally(location, item);
+                fromItems[slot] = null;
             }
         }
         
-        for (int slot = 0; slot < chestContents.length; slot++) {
-            chestContents[slot] = null;
-        }
-        chestInventory.setStorageContents(chestContents);
+        from.setStorageContents(fromItems);
     }
     
     @NotNull
     private String formatTime(final long logoutTime) {
         
         final long now = System.currentTimeMillis();
-        final long end = logoutTime + TradePlugin.OFFLINE_TIMEOUT;
+        final long expire;
+        if (now - OFFLINE_TIMEOUT < this.serverStart) {
+            final long offlineTime = this.serverStart - this.serverStop;
+            expire = logoutTime + OFFLINE_TIMEOUT + offlineTime;
+        } else {
+            expire = logoutTime + OFFLINE_TIMEOUT;
+        }
         
         final StringBuilder builder = new StringBuilder();
-        if (now >= end) {
+        if (now >= expire) {
             builder.append("0 seconds");
             return builder.toString();
         }
         
-        long diff = end - now;
+        long diff = expire - now;
         if (diff % 1000L != 0L) {
             diff += 1000L - (diff % 1000L);
         }
@@ -2540,13 +2459,17 @@ public final class TradePlugin extends JavaPlugin {
         final long seconds = diff % 60L;
         
         if (minutes > 1L) {
-            builder.append(minutes).append(" minutes, ");
+            builder.append(minutes).append(" minutes");
         } else if (minutes == 1L) {
-            builder.append(minutes).append(" minute, ");
+            builder.append(minutes).append(" minute");
         }
         
         if (!builder.toString().isEmpty() && seconds == 0L) {
             return builder.toString();
+        }
+        
+        if (!builder.isEmpty()) {
+            builder.append(", ");
         }
         
         builder.append(seconds).append(" second");
@@ -2581,315 +2504,307 @@ public final class TradePlugin extends JavaPlugin {
         return true;
     }
     
-    private boolean linkRooms(@NotNull final CommandSender sender, @NotNull final TradeRoom room1, @NotNull final TradeRoom room2) {
-        
-        try {
-            room2.link(room1);
-            room1.link(room2);
-        } catch (IllegalArgumentException e) {
-            sender.sendMessage(e.getMessage());
-            this.logger.log(Level.WARNING, "ISSUE WHILE LINKING TRADEROOMS");
-            this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "TradeChest 1:" + room1.getName());
-            this.logger.log(Level.WARNING, "TradeChest 2:" + room2.getName());
-            this.logger.log(Level.WARNING, "ISSUE:");
-            this.logger.log(Level.WARNING, "Player " + sender.getName() + " is attempting to link 2 TradeChests.");
-            this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-            return false;
-        }
-        
-        this.pairings.put(room1, room2);
-        this.pairings.put(room2, room1);
-        
-        this.saveTradeRoom(sender, room1);
-        this.saveTradeRoom(sender, room2);
-        return true;
-    }
-    
-    private void unlinkRoom(@NotNull final CommandSender sender, @NotNull final TradeRoom room) {
-        
-        final TradeRoom linked = this.pairings.get(room);
-        if (linked != null && linked.getLinked() != null && linked.getLinked().equals(room.getName())) {
-            
-            linked.unlink();
-            this.pairings.put(linked, null);
-            this.saveTradeRoom(sender, linked);
-        }
-        
-        room.unlink();
-        this.pairings.put(room, null);
-        this.saveTradeRoom(sender, room);
-    }
-    
-    @NotNull
-    private Inventory createTradeInventory(@NotNull final Inventory chestInventory) {
-        
-        final Inventory tradeInventory = this.getServer().createInventory(null, 45);
-        final ItemStack[] items = chestInventory.getStorageContents();
-        for (int slot = 0; slot < items.length && slot < 27; slot++) {
-            tradeInventory.setItem(slot, items[slot]);
-        }
-        
-        final ItemStack fill = new ItemStack(Material.BLACK_CONCRETE);
-        final ItemMeta fillMeta = fill.getItemMeta();
-        fillMeta.setDisplayName("");
-        fill.setItemMeta(fillMeta);
-        for (int slot = 37; slot < 44; slot++) {
-            tradeInventory.setItem(slot, fill);
-        }
-        
-        final ItemStack reject = new ItemStack(Material.RED_CONCRETE);
-        final ItemMeta rejectMeta = reject.getItemMeta();
-        rejectMeta.setDisplayName("REJECT/CANCEL TRADE");
-        reject.setItemMeta(rejectMeta);
-        tradeInventory.setItem(TradePlugin.SLOT_REJECT, reject);
-        
-        final ItemStack accept = new ItemStack(Material.LIME_CONCRETE);
-        final ItemMeta acceptMeta = accept.getItemMeta();
-        acceptMeta.setDisplayName("ACCEPT TRADE");
-        accept.setItemMeta(acceptMeta);
-        tradeInventory.setItem(TradePlugin.SLOT_ACCEPT, accept);
-        
-        return tradeInventory;
-    }
-    
     /////////////////
     // FILE SAVING //
     /////////////////
     
-    private void saveTradeRoom(@NotNull final CommandSender sender, @NotNull final TradeRoom room) {
-        
-        this.scheduler.runTaskAsynchronously(this, () -> {
-            
-            final File tradeChestFile = new File(this.tradeRoomFolder, room.getName() + ".yml");
-            try {
-                if (!tradeChestFile.exists()) {
-                    if (!tradeChestFile.createNewFile()) {
-                        sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
-                        this.logger.log(Level.WARNING, "TradeChest YAML Data: " + room.getConfig().toString());
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "TradeChest file not created successfully.");
-                        return;
-                    }
-                }
-            } catch (SecurityException | IOException e) {
-                sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
-                this.logger.log(Level.WARNING, "TradeChest YAML Data: " + room.getConfig().toString());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to create TradeChest file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-                return;
-            }
-            
-            final FileConfiguration config = room.getConfig();
-            try {
-                config.save(tradeChestFile);
-            } catch (IOException | IllegalArgumentException e) {
-                sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
-                this.logger.log(Level.WARNING, "TradeChest YAML Data: " + room.getConfig().toString());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to save TradeChest configuration file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-            }
-        });
+    private void saveRoom(@NotNull final CommandSender sender, @NotNull final TradeRoom room) {
+        this.saveRoom(sender, room, false);
     }
     
-    private void saveActiveTrade(@NotNull final CommandSender sender, @NotNull final ActiveTrade activeTrade) {
+    private void saveRoom(@NotNull final CommandSender sender, @NotNull final TradeRoom room, final boolean shutdown) {
         
-        this.scheduler.runTaskAsynchronously(this, () -> {
-            
-            final File activeTradeFile = new File(this.activeTradesFolder, activeTrade.getUniqueId1().toString() + "-" + activeTrade.getRoom().getName() + ".yml");
-            try {
-                if (!activeTradeFile.exists()) {
-                    if (!activeTradeFile.createNewFile()) {
-                        sender.sendMessage("There was an error while updating your trade. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING ACTIVETRADE FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
-                        this.logger.log(Level.WARNING, "ActiveTrade YAML Data:");
-                        this.logger.log(Level.WARNING, "uuid: " + activeTrade.getUniqueId1().toString());
-                        this.logger.log(Level.WARNING, "name: " + activeTrade.getName1());
-                        this.logger.log(Level.WARNING, "trade_chest:" + activeTrade.getRoom().getName());
-                        this.logger.log(Level.WARNING, "trade_status: " + activeTrade.getStatus().name());
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "ActiveTrade file not created successfully.");
-                        return;
+        final Runnable runnable = () -> {
+            synchronized (this.tradeRoomFolder) {
+                
+                final File tradeRoomFile = new File(this.tradeRoomFolder, room.getName() + Constants.FILE_TYPE);
+                final FileConfiguration config = room.getConfig();
+                
+                try {
+                    if (!tradeRoomFile.exists()) {
+                        if (!tradeRoomFile.createNewFile()) {
+                            sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
+                            this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
+                            this.logger.log(Level.WARNING, "Details below:");
+                            this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeRoomFile.getPath());
+                            this.logger.log(Level.WARNING, "TradeChest YAML Data: " + config.toString());
+                            this.logger.log(Level.WARNING, "ISSUE:");
+                            this.logger.log(Level.WARNING, "TradeChest file not created successfully.");
+                            return;
+                        }
                     }
+                } catch (SecurityException | IOException e) {
+                    sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeRoomFile.getPath());
+                    this.logger.log(Level.WARNING, "TradeChest YAML Data: " + config.toString());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to create TradeChest file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                    return;
                 }
-            } catch (SecurityException | IOException e) {
-                sender.sendMessage("There was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING ACTIVETRADE FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
-                this.logger.log(Level.WARNING, "ActiveTrade YAML Data:");
-                this.logger.log(Level.WARNING, "uuid: " + activeTrade.getUniqueId1().toString());
-                this.logger.log(Level.WARNING, "name: " + activeTrade.getName1());
-                this.logger.log(Level.WARNING, "trade_chest:" + activeTrade.getRoom().getName());
-                this.logger.log(Level.WARNING, "trade_status: " + activeTrade.getStatus().name());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to create ActiveTrade file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-                return;
+                
+                
+                try {
+                    config.save(tradeRoomFile);
+                } catch (IOException | IllegalArgumentException e) {
+                    sender.sendMessage("There was an error while updating the TradeChest. Please report this error to a server administrator.");
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING TRADECHEST FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeRoomFile.getPath());
+                    this.logger.log(Level.WARNING, "TradeChest YAML Data: " + config.toString());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to save TradeChest configuration file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                }
             }
-            
-            final YamlConfiguration config = new YamlConfiguration();
-            config.set("uuid", activeTrade.getUniqueId1().toString());
-            config.set("name", activeTrade.getName1());
-            config.set("trade_chest", activeTrade.getRoom().getName());
-            config.set("trade_status", activeTrade.getStatus().name());
-            try {
-                config.save(activeTradeFile);
-            } catch (IOException | IllegalArgumentException e) {
-                sender.sendMessage("There was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING ACTIVETRADE FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
-                this.logger.log(Level.WARNING, "ActiveTrade YAML Data:");
-                this.logger.log(Level.WARNING, "uuid: " + activeTrade.getUniqueId1().toString());
-                this.logger.log(Level.WARNING, "name: " + activeTrade.getName1());
-                this.logger.log(Level.WARNING, "trade_chest:" + activeTrade.getRoom().getName());
-                this.logger.log(Level.WARNING, "trade_status: " + activeTrade.getStatus().name());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to save ActiveTrade configuration file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-            }
-        });
+        };
+        
+        if (shutdown) {
+            runnable.run();
+        } else {
+            this.scheduler.runTaskAsynchronously(this, runnable);
+        }
     }
     
     private void saveChestInventories(@NotNull final CommandSender sender, @NotNull final TradeRoom room) {
         
         this.scheduler.runTaskAsynchronously(this, () -> {
-            
-            final List<Map<String, Object>> items1 = new ArrayList<Map<String, Object>>();
-            for (final ItemStack item : room.getChest1().getInventory().getStorageContents()) {
-                items1.add(item == null ? null : item.serialize());
-            }
-            final List<Map<String, Object>> items2 = new ArrayList<Map<String, Object>>();
-            for (final ItemStack item : room.getChest2().getInventory().getStorageContents()) {
-                items2.add(item == null ? null : item.serialize());
-            }
-            
-            final File backupInventoryFile = new File(this.backupInventoryFolder, room.getName() + Constants.FILE_TYPE);
-            try {
-                if (!backupInventoryFile.exists()) {
-                    if (!backupInventoryFile.createNewFile()) {
-                        sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
-                        this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
-                        this.logger.log(Level.WARNING, "Trade Room Name:" + room.getName());
-                        this.logger.log(Level.WARNING, "Chest 1 Items: " + items1.toString());
-                        this.logger.log(Level.WARNING, "Chest 2 Items: " + items2.toString());
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "Backup Inventory file not created successfully.");
-                        return;
-                    }
+            synchronized (this.backupInventoryFolder) {
+                
+                final List<Map<String, Object>> items1 = new ArrayList<Map<String, Object>>();
+                for (final ItemStack item : room.getChest1().getInventory().getStorageContents()) {
+                    items1.add(item == null ? null : item.serialize());
                 }
-            } catch (SecurityException | IOException e) {
-                sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
-                this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
-                this.logger.log(Level.WARNING, "Trade Room Name:" + room.getName());
-                this.logger.log(Level.WARNING, "Chest 1 Items: " + items1.toString());
-                this.logger.log(Level.WARNING, "Chest 2 Items: " + items2.toString());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to create Backup Inventory file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-                return;
-            }
-            
-            final YamlConfiguration config = new YamlConfiguration();
-            config.set(Constants.KEY_TRADE_ROOM_NAME, room.getName());
-            config.set(Constants.KEY_BACKUP_ITEMS_1, items1);
-            config.set(Constants.KEY_BACKUP_ITEMS_2, items2);
-            
-            try {
-                config.save(backupInventoryFile);
-            } catch (IOException | IllegalArgumentException e) {
-                sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
-                this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
-                this.logger.log(Level.WARNING, "Trade Room Name:" + room.getName());
-                this.logger.log(Level.WARNING, "Chest 1 Items: " + items1.toString());
-                this.logger.log(Level.WARNING, "Chest 2 Items: " + items2.toString());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to save Backup Inventory configuration file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                final List<Map<String, Object>> items2 = new ArrayList<Map<String, Object>>();
+                for (final ItemStack item : room.getChest2().getInventory().getStorageContents()) {
+                    items2.add(item == null ? null : item.serialize());
+                }
+                
+                final File backupInventoryFile = new File(this.backupInventoryFolder, room.getName() + Constants.FILE_TYPE);
+                try {
+                    if (!backupInventoryFile.exists()) {
+                        if (!backupInventoryFile.createNewFile()) {
+                            sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
+                            this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
+                            this.logger.log(Level.WARNING, "Details below:");
+                            this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                            this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
+                            this.logger.log(Level.WARNING, "Trade Room Name:" + room.getName());
+                            this.logger.log(Level.WARNING, "Chest 1 Items: " + items1.toString());
+                            this.logger.log(Level.WARNING, "Chest 2 Items: " + items2.toString());
+                            this.logger.log(Level.WARNING, "ISSUE:");
+                            this.logger.log(Level.WARNING, "Backup Inventory file not created successfully.");
+                            return;
+                        }
+                    }
+                } catch (SecurityException | IOException e) {
+                    sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                    this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
+                    this.logger.log(Level.WARNING, "Trade Room Name:" + room.getName());
+                    this.logger.log(Level.WARNING, "Chest 1 Items: " + items1.toString());
+                    this.logger.log(Level.WARNING, "Chest 2 Items: " + items2.toString());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to create Backup Inventory file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                    return;
+                }
+                
+                final YamlConfiguration config = new YamlConfiguration();
+                config.set(Constants.KEY_TRADE_ROOM_NAME, room.getName());
+                config.set(Constants.KEY_BACKUP_ITEMS_1, items1);
+                config.set(Constants.KEY_BACKUP_ITEMS_2, items2);
+                
+                try {
+                    config.save(backupInventoryFile);
+                } catch (IOException | IllegalArgumentException e) {
+                    sender.sendMessage("§cThere was an error while updating your trade. Please report this error to a server administrator.");
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING BACKUP INVENTORY FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                    this.logger.log(Level.WARNING, "Backup Inventory YAML Data:");
+                    this.logger.log(Level.WARNING, "Trade Room Name:" + room.getName());
+                    this.logger.log(Level.WARNING, "Chest 1 Items: " + items1.toString());
+                    this.logger.log(Level.WARNING, "Chest 2 Items: " + items2.toString());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to save Backup Inventory configuration file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                }
             }
         });
     }
     
-    private void saveOfflineTrader(@NotNull final CommandSender sender, @NotNull final OfflineTrader trader) {
+    private void saveOffline(@Nullable final Offline offline, @Nullable final Inventory extra) {
         
-        this.scheduler.runTaskAsynchronously(this, () -> {
+        if (offline == null) {
+            return;
+        }
+        
+        if (extra != null) {
             
-            final File offlineTraderFile = new File(this.offlineTraderFolder, trader.getUniqueId().toString() + Constants.FILE_TYPE);
-            try {
-                if (!offlineTraderFile.exists()) {
-                    if (!offlineTraderFile.createNewFile()) {
-                        sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                        this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
-                        this.logger.log(Level.WARNING, "uuid: " + trader.getUniqueId().toString());
-                        this.logger.log(Level.WARNING, "name:" + trader.getName());
-                        this.logger.log(Level.WARNING, "logout_time:" + trader.getLogoutTime());
-                        this.logger.log(Level.WARNING, "complete_reason: " + (trader.getCompleteReason() == null ? "null" : trader.getCompleteReason().name()));
-                        this.logger.log(Level.WARNING, "items: " + (trader.getInventory() == null ? "null" : trader.getInventory().toString()));
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "OfflineTrader file not created successfully.");
-                        return;
-                    }
+            final List<ItemStack> items = new ArrayList<ItemStack>();
+            for (final ItemStack item : extra.getStorageContents()) {
+                if (item != null && item.getType() != Material.AIR) {
+                    items.add(item);
                 }
-            } catch (SecurityException | IOException e) {
-                sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
-                this.logger.log(Level.WARNING, "uuid: " + trader.getUniqueId().toString());
-                this.logger.log(Level.WARNING, "name:" + trader.getName());
-                this.logger.log(Level.WARNING, "logout_time:" + trader.getLogoutTime());
-                this.logger.log(Level.WARNING, "complete_reason: " + (trader.getCompleteReason() == null ? "null" : trader.getCompleteReason().name()));
-                this.logger.log(Level.WARNING, "items: " + (trader.getInventory() == null ? "null" : trader.getInventory().toString()));
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to create OfflineTrader file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-                return;
             }
             
-            final FileConfiguration config = trader.getConfig();
-            try {
-                config.save(offlineTraderFile);
-            } catch (IOException | IllegalArgumentException e) {
-                sender.sendMessage("§cThere was an error while updating your returnable items. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
-                this.logger.log(Level.WARNING, "uuid: " + trader.getUniqueId().toString());
-                this.logger.log(Level.WARNING, "name:" + trader.getName());
-                this.logger.log(Level.WARNING, "logout_time:" + trader.getLogoutTime());
-                this.logger.log(Level.WARNING, "complete_reason: " + (trader.getCompleteReason() == null ? "null" : trader.getCompleteReason().name()));
-                this.logger.log(Level.WARNING, "items: " + (trader.getInventory() == null ? "null" : trader.getInventory().toString()));
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to save OfflineTrader configuration file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+            if (this.extras.containsKey(offline.getUniqueId())) {
+                this.extras.get(offline.getUniqueId()).addAll(items);
+            } else {
+                this.extras.put(offline.getUniqueId(), items);
+            }
+        }
+        
+        this.scheduler.runTaskAsynchronously(this, () -> {
+            synchronized (this.offlineFolder) {
+                
+                final File offlineFile = new File(this.offlineFolder, offline.getUniqueId().toString() + Constants.FILE_TYPE);
+                try {
+                    if (!offlineFile.exists()) {
+                        if (!offlineFile.createNewFile()) {
+                            this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                            this.logger.log(Level.WARNING, "Details below:");
+                            this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineFile.getPath());
+                            this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
+                            this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                            this.logger.log(Level.WARNING, "name:" + offline.getName());
+                            this.logger.log(Level.WARNING, "logout_time:" + offline.getLogoutTime());
+                            this.logger.log(Level.WARNING, "complete_reason: " + (offline.getReason() == null ? "null" : offline.getReason().name()));
+                            this.logger.log(Level.WARNING, "items: " + (offline.getInventory() == null ? "null" : offline.getInventory().toString()));
+                            this.logger.log(Level.WARNING, "ISSUE:");
+                            this.logger.log(Level.WARNING, "OfflineTrader file not created successfully.");
+                            return;
+                        }
+                    }
+                } catch (SecurityException | IOException e) {
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineFile.getPath());
+                    this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
+                    this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                    this.logger.log(Level.WARNING, "name:" + offline.getName());
+                    this.logger.log(Level.WARNING, "logout_time:" + offline.getLogoutTime());
+                    this.logger.log(Level.WARNING, "complete_reason: " + (offline.getReason() == null ? "null" : offline.getReason().name()));
+                    this.logger.log(Level.WARNING, "items: " + (offline.getInventory() == null ? "null" : offline.getInventory().toString()));
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to create OfflineTrader file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                    return;
+                }
+                
+                final FileConfiguration config = offline.getConfig();
+                try {
+                    config.save(offlineFile);
+                } catch (IOException | IllegalArgumentException e) {
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING OFFLINETRADER FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineFile.getPath());
+                    this.logger.log(Level.WARNING, "OfflineTrader YAML Data:");
+                    this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                    this.logger.log(Level.WARNING, "name:" + offline.getName());
+                    this.logger.log(Level.WARNING, "logout_time:" + offline.getLogoutTime());
+                    this.logger.log(Level.WARNING, "complete_reason: " + (offline.getReason() == null ? "null" : offline.getReason().name()));
+                    this.logger.log(Level.WARNING, "items: " + (offline.getInventory() == null ? "null" : offline.getInventory().toString()));
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to save OfflineTrader configuration file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                }
+                
+                if (extra == null) {
+                    return;
+                }
+                
+                final File extraFile = new File(this.extraFolder, offline.getUniqueId().toString() + Constants.FILE_TYPE);
+                try {
+                    if (!extraFile.exists()) {
+                        if (!extraFile.createNewFile()) {
+                            this.logger.log(Level.WARNING, "ISSUE WHILE SAVING EXTRAINVENTORY FILE");
+                            this.logger.log(Level.WARNING, "Details below:");
+                            this.logger.log(Level.WARNING, "ExtraInventory File Location: " + extraFile.getPath());
+                            this.logger.log(Level.WARNING, "ExtraInventory YAML Data:");
+                            this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                            this.logger.log(Level.WARNING, "items: " + extra.toString());
+                            this.logger.log(Level.WARNING, "ISSUE:");
+                            this.logger.log(Level.WARNING, "ExtraInventory file not created successfully.");
+                            return;
+                        }
+                    }
+                } catch (SecurityException | IOException e) {
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING EXTRAINVENTORY FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "ExtraInventory File Location: " + extraFile.getPath());
+                    this.logger.log(Level.WARNING, "ExtraInventory YAML Data:");
+                    this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                    this.logger.log(Level.WARNING, "items: " + extra.toString());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to create ExtraInventory file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                    return;
+                }
+                
+                final FileConfiguration extraConfig = new YamlConfiguration();
+                try {
+                    extraConfig.load(extraFile);
+                } catch (final IOException | InvalidConfigurationException | IllegalArgumentException e) {
+                    this.logger.log(Level.WARNING, "ISSUE WHILE LOADING EXTRAINVENTORY FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "ExtraInventory File Location: " + extraFile.getPath());
+                    this.logger.log(Level.WARNING, "ExtraInventory YAML Data:");
+                    this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                    this.logger.log(Level.WARNING, "items: " + extra.toString());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to load ExtraInventory file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                    return;
+                }
+                
+                if (extraConfig.isSet(Constants.KEY_EXTRA_UUID)) {
+                    if (!offline.getUniqueId().toString().equalsIgnoreCase(extraConfig.getString(Constants.KEY_EXTRA_UUID, null))) {
+                        this.logger.log(Level.WARNING, "ISSUE WHILE VALIDATING EXTRAINVENTORY FILE");
+                        this.logger.log(Level.WARNING, "Details below:");
+                        this.logger.log(Level.WARNING, "ExtraInventory File Location: " + extraFile.getPath());
+                        this.logger.log(Level.WARNING, "ExtraInventory YAML Data:");
+                        this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                        this.logger.log(Level.WARNING, "items: " + extra.toString());
+                        this.logger.log(Level.WARNING, "ISSUE:");
+                        this.logger.log(Level.WARNING, "UUID does not match existing.");
+                        return;
+                    }
+                } else {
+                    extraConfig.set(Constants.KEY_EXTRA_UUID, offline.getUniqueId().toString());
+                }
+                
+                List<Map<String, Object>> items = (List<Map<String, Object>>) extraConfig.getList(Constants.KEY_EXTRA_ITEMS, null);
+                if (items == null) {
+                    items = new ArrayList<Map<String, Object>>();
+                }
+                
+                for (final ItemStack item : extra.getStorageContents()) {
+                    if (item != null && item.getType() != Material.AIR) {
+                        items.add(item.serialize());
+                    }
+                }
+                
+                extraConfig.set(Constants.KEY_EXTRA_ITEMS, items);
+                
+                try {
+                    extraConfig.save(extraFile);
+                } catch (IOException | IllegalArgumentException e) {
+                    this.logger.log(Level.WARNING, "ISSUE WHILE SAVING EXTRAINVENTORY FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "ExtraInventory File Location: " + extraFile.getPath());
+                    this.logger.log(Level.WARNING, "ExtraInventory YAML Data:");
+                    this.logger.log(Level.WARNING, "uuid: " + offline.getUniqueId().toString());
+                    this.logger.log(Level.WARNING, "items: " + extra.toString());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to save ExtraInventory configuration file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
+                }
             }
         });
     }
@@ -2898,115 +2813,60 @@ public final class TradePlugin extends JavaPlugin {
     // FILE DELETION //
     ///////////////////
     
-    private void deleteTradeChest(@NotNull final CommandSender sender, @NotNull final TradeChest tradeChest) {
-        
-        this.scheduler.runTaskAsynchronously(this, () -> {
-            
-            final File tradeChestFile = new File(this.tradeRoomFolder, tradeChest.getName() + ".yml");
-            try {
-                if (tradeChestFile.exists()) {
-                    if (!tradeChestFile.delete()) {
-                        sender.sendMessage("§cThere was an error while deleting the TradeChest. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING TRADECHEST FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "TradeChest file not deleted successfully.");
-                    }
-                }
-            } catch (SecurityException e) {
-                sender.sendMessage("§cThere was an error while deleting the TradeChest. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING TRADECHEST FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "TradeChest File Location: " + tradeChestFile.getPath());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to delete TradeChest file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-            }
-        });
-    }
-    
-    private void deleteActiveTrade(@NotNull final CommandSender sender, @NotNull final ActiveTrade activeTrade) {
-        
-        this.scheduler.runTaskAsynchronously(this, () -> {
-            
-            final File activeTradeFile = new File(this.activeTradesFolder, activeTrade.getUniqueId1().toString() + "-" + activeTrade.getRoom().getName() + Constants.FILE_TYPE);
-            try {
-                if (activeTradeFile.exists()) {
-                    if (!activeTradeFile.delete()) {
-                        sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING ACTIVETRADE FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "ActiveTrade file not deleted successfully.");
-                    }
-                }
-            } catch (SecurityException e) {
-                sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING ACTIVETRADE FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "ActiveTrade File Location: " + activeTradeFile.getPath());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to delete ActiveTrade file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
-            }
-        });
-    }
-    
     private void deleteChestInventories(@NotNull final CommandSender sender, @NotNull final TradeRoom room) {
         
         this.scheduler.runTaskAsynchronously(this, () -> {
-            
-            final File backupInventoryFile = new File(this.backupInventoryFolder, room.getName() + Constants.FILE_TYPE);
-            try {
-                if (backupInventoryFile.exists()) {
-                    if (!backupInventoryFile.delete()) {
-                        sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING BACKUP INVENTORY FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "Backup Inventory file not deleted successfully.");
+            synchronized (this.backupInventoryFolder) {
+                
+                final File backupInventoryFile = new File(this.backupInventoryFolder, room.getName() + Constants.FILE_TYPE);
+                try {
+                    if (backupInventoryFile.exists()) {
+                        if (!backupInventoryFile.delete()) {
+                            sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
+                            this.logger.log(Level.WARNING, "ISSUE WHILE DELETING BACKUP INVENTORY FILE");
+                            this.logger.log(Level.WARNING, "Details below:");
+                            this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                            this.logger.log(Level.WARNING, "ISSUE:");
+                            this.logger.log(Level.WARNING, "Backup Inventory file not deleted successfully.");
+                        }
                     }
+                } catch (SecurityException e) {
+                    sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
+                    this.logger.log(Level.WARNING, "ISSUE WHILE DELETING BACKUP INVENTORY FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to delete Backup Inventory file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 }
-            } catch (SecurityException e) {
-                sender.sendMessage("§cThere was an error while completing your trade. Please report this error to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING BACKUP INVENTORY FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "Backup Inventory File Location: " + backupInventoryFile.getPath());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to delete Backup Inventory file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
     }
     
-    private void deleteOfflineTrader(@NotNull final CommandSender sender, @NotNull final OfflineTrader offlineTrader) {
+    private void deleteOffline(@NotNull final Offline offline) {
         
         this.scheduler.runTaskAsynchronously(this, () -> {
-            
-            final UUID playerId = offlineTrader.getUniqueId();
-            final File offlineTraderFile = new File(this.offlineTraderFolder, playerId.toString() + Constants.FILE_TYPE);
-            try {
-                if (offlineTraderFile.exists()) {
-                    if (!offlineTraderFile.delete()) {
-                        sender.sendMessage("§cThere was an error while returning your items. Please report this to a server administrator.");
-                        this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
-                        this.logger.log(Level.WARNING, "Details below:");
-                        this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                        this.logger.log(Level.WARNING, "ISSUE:");
-                        this.logger.log(Level.WARNING, "OfflineTrader file not deleted successfully.");
+            synchronized (this.offlineFolder) {
+                
+                final File offlineFile = new File(this.offlineFolder, offline.getUniqueId().toString() + Constants.FILE_TYPE);
+                try {
+                    if (offlineFile.exists()) {
+                        if (!offlineFile.delete()) {
+                            this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
+                            this.logger.log(Level.WARNING, "Details below:");
+                            this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineFile.getPath());
+                            this.logger.log(Level.WARNING, "ISSUE:");
+                            this.logger.log(Level.WARNING, "OfflineTrader file not deleted successfully.");
+                        }
                     }
+                } catch (SecurityException e) {
+                    this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
+                    this.logger.log(Level.WARNING, "Details below:");
+                    this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineFile.getPath());
+                    this.logger.log(Level.WARNING, "ISSUE:");
+                    this.logger.log(Level.WARNING, "Unable to delete OfflineTrader file.");
+                    this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
                 }
-            } catch (SecurityException e) {
-                sender.sendMessage("§cThere was an error while returning your items. Please report this to a server administrator.");
-                this.logger.log(Level.WARNING, "ISSUE WHILE DELETING OFFLINETRADER FILE");
-                this.logger.log(Level.WARNING, "Details below:");
-                this.logger.log(Level.WARNING, "OfflineTrader File Location: " + offlineTraderFile.getPath());
-                this.logger.log(Level.WARNING, "ISSUE:");
-                this.logger.log(Level.WARNING, "Unable to delete OfflineTrader file.");
-                this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
             }
         });
     }

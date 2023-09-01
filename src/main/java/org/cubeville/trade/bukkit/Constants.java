@@ -31,14 +31,16 @@ public final class Constants {
     
     public static final String FOLDER_TRADE_ROOMS = "trade_rooms";
     
-    public static final String FOLDER_ACTIVE_TRADES = "active_trades";
-    
     public static final String FOLDER_BACKUP_INVENTORIES = "backup_inventories";
     public static final String KEY_TRADE_ROOM_NAME = "trade_room_name";
     public static final String KEY_BACKUP_ITEMS_1 = "backup_items_1";
     public static final String KEY_BACKUP_ITEMS_2 = "backup_items_2";
     
     public static final String FOLDER_OFFLINE_TRADERS = "offline_traders";
+    
+    public static final String FOLDER_OFFLINE_EXTRAS = "offline_extras";
+    public static final String KEY_EXTRA_UUID = "extra_uuid";
+    public static final String KEY_EXTRA_ITEMS = "extra_items";
     
     private Constants() {
         // Do nothing.

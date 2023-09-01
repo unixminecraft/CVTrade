@@ -548,7 +548,27 @@ public final class TradeRoomBuilder {
             throw new IllegalStateException();
         }
         
-        return new TradeRoom(this.name, this.region1, this.chest1, this.teleportIn1, this.teleportOut1, this.buttonIn1, this.buttonOut1, this.buttonLock1, this.buttonAccept1, this.buttonDeny1, this.region2, this.chest2, this.teleportIn2, this.teleportOut2, this.buttonIn2, this.buttonOut2, this.buttonLock2, this.buttonAccept2, this.buttonDeny2);
+        return new TradeRoom(
+                this.name,
+                this.region1,
+                this.chest1,
+                this.teleportIn1,
+                this.teleportOut1,
+                this.buttonIn1,
+                this.buttonOut1,
+                this.buttonLock1,
+                this.buttonAccept1,
+                this.buttonDeny1,
+                this.region2,
+                this.chest2,
+                this.teleportIn2,
+                this.teleportOut2,
+                this.buttonIn2,
+                this.buttonOut2,
+                this.buttonLock2,
+                this.buttonAccept2,
+                this.buttonDeny2
+        );
     }
     
     @Nullable

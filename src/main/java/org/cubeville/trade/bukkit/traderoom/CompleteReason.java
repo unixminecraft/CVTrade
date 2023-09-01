@@ -24,13 +24,23 @@ package org.cubeville.trade.bukkit.traderoom;
 
 import org.jetbrains.annotations.NotNull;
 
-public enum Side {
+public enum CompleteReason {
     
-    SIDE_1,
-    SIDE_2;
+    OFFLINE_SELF("§cYour trade has been automatically cancelled because you were offline for too long."),
+    OFFLINE_OTHER("§cYour trade has been automatically cancelled because the other player was offline for too long."),
+    CANCELLED("§cYour trade has been cancelled because the other player cancelled the trade while you were offline."),
+    REJECTED("§cYour trade has been cancelled because the other player rejected your trade offer while you were offline."),
+    ACCEPTED("§aYour trade has been finished because the other player accepted your trade offer while you were offline."),
+    ERROR("§cYour trade has been cancelled because there was a system error. Please report this to a server administrator.");
+    
+    private final String message;
+    
+    CompleteReason(@NotNull final String message) {
+        this.message = message;
+    }
     
     @NotNull
-    public Side getOther() {
-        return this == SIDE_1 ? SIDE_2 : SIDE_1;
+    public String getMessage() {
+        return this.message;
     }
 }

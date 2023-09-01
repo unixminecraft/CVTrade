@@ -43,8 +43,12 @@ final class Button {
         return this.location;
     }
     
-    boolean contains(@NotNull final Location location) {
-        return this.location.equals(location) || this.attachedBlock.equals(location);
+    boolean contains(@NotNull final Location location, final boolean exact) {
+        if (exact) {
+            return this.location.equals(location);
+        } else {
+            return this.location.equals(location) || this.attachedBlock.equals(location);
+        }
     }
     
     @Override

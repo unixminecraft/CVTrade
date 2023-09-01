@@ -20,16 +20,26 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package org.cubeville.trade.bukkit.traderoom;
+package org.cubeville.trade.bukkit;
 
-public enum TradeStatus {
+import org.jetbrains.annotations.NotNull;
+
+final class CancelRequest {
     
-    WAIT,
-    PREPARE,
-    LOCKED_1,
-    LOCKED_2,
-    DECIDE,
-    ACCEPT_1,
-    ACCEPT_2,
-    COMPLETE;
+    private final String type;
+    private final int taskId;
+    
+    CancelRequest(@NotNull final String type, final int taskId) {
+        this.type = type;
+        this.taskId = taskId;
+    }
+    
+    @NotNull
+    String getType() {
+        return this.type;
+    }
+    
+    int getTaskId() {
+        return this.taskId;
+    }
 }
