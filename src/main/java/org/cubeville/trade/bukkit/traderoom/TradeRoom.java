@@ -164,7 +164,7 @@ public final class TradeRoom {
         this.trader2 = null;
     }
     
-    public TradeRoom(@NotNull final Server server, @NotNull final Configuration config) throws IllegalArgumentException {
+    public TradeRoom(@NotNull final Server server, final long offlineTime, @NotNull final Configuration config) throws IllegalArgumentException {
         
         final String nameRaw = config.getString(KEY_NAME, null);
         final String name = nameRaw == null ? null : nameRaw.trim().toLowerCase();
@@ -306,7 +306,7 @@ public final class TradeRoom {
             throw new IllegalArgumentException("Cannot have blank name for trader 1.");
         }
         
-        final long trader1LogoutTime;
+        long trader1LogoutTime;
         if (config.isSet(KEY_TRADER_1_LOGOUT_TIME)) {
             trader1LogoutTime = config.getLong(KEY_TRADER_1_LOGOUT_TIME, -1L);
         } else {
@@ -314,6 +314,8 @@ public final class TradeRoom {
         }
         if (trader1LogoutTime < 0L) {
             throw new IllegalArgumentException("Cannot have invalid logout time for trader 1.");
+        } else if (trader1LogoutTime > 0L) {
+            trader1LogoutTime += offlineTime;
         }
         
         final Trader trader1;
@@ -340,7 +342,7 @@ public final class TradeRoom {
             throw new IllegalArgumentException("Cannot have blank name for trader 2.");
         }
         
-        final long trader2LogoutTime;
+        long trader2LogoutTime;
         if (config.isSet(KEY_TRADER_2_LOGOUT_TIME)) {
             trader2LogoutTime = config.getLong(KEY_TRADER_2_LOGOUT_TIME, -1L);
         } else {
@@ -348,6 +350,8 @@ public final class TradeRoom {
         }
         if (trader2LogoutTime < 0L) {
             throw new IllegalArgumentException("Cannot have invalid logout time for trader 2.");
+        } else if (trader2LogoutTime > 0L) {
+            trader2LogoutTime += offlineTime;
         }
         
         final Trader trader2;

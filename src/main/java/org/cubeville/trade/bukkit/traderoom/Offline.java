@@ -64,7 +64,7 @@ public final class Offline {
         this.teleport = null;
     }
     
-    public Offline(@NotNull final ConfigurationSection config) throws IllegalArgumentException {
+    public Offline(final long offlineTime, @NotNull final ConfigurationSection config) throws IllegalArgumentException {
         
         final String uuid = config.getString(KEY_UUID, null);
         if (uuid == null) {
@@ -84,10 +84,11 @@ public final class Offline {
             throw new IllegalArgumentException("Cannot have blank name for trader.");
         }
         
-        final long logoutTime = config.getLong(KEY_LOGOUT_TIME, -1L);
+        long logoutTime = config.getLong(KEY_LOGOUT_TIME, -1L);
         if (logoutTime <= 0L) {
             throw new IllegalArgumentException("Cannot have invalid logout time for trader.");
         }
+        logoutTime += offlineTime;
         
         final String reasonName = config.getString(KEY_COMPLETE_REASON, null);
         if (reasonName != null && reasonName.trim().isEmpty()) {

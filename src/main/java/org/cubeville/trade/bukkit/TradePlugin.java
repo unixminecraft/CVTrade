@@ -22,6 +22,8 @@
 
 package org.cubeville.trade.bukkit;
 
+import com.sk89q.worldedit.bukkit.BukkitAdapter;
+import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -78,8 +80,6 @@ public final class TradePlugin extends JavaPlugin {
     private final CommandSender console;
     
     private final File serverStopFile;
-    private long serverStart;
-    private long serverStop;
     
     private final File tradeRoomFolder;
     private final Map<UUID, TradeRoomBuilder> builders;
@@ -206,7 +206,7 @@ public final class TradePlugin extends JavaPlugin {
         
         // Server statistics //
         
-        this.serverStart = System.currentTimeMillis();
+        final long now = System.currentTimeMillis();
         
         final YamlConfiguration stopConfig = new YamlConfiguration();
         try {
@@ -214,10 +214,13 @@ public final class TradePlugin extends JavaPlugin {
         } catch (final IOException | InvalidConfigurationException | IllegalArgumentException e) {
             throw new RuntimeException("Unable to load server stop file at " + this.serverStopFile.getPath(), e);
         }
-        this.serverStop = stopConfig.getLong(Constants.KEY_SERVER_STOP_TIME, -1L);
         
-        if (this.serverStop == -1L) {
-            this.serverStop = this.serverStart - OFFLINE_TIMEOUT;
+        final long serverStop = stopConfig.getLong(Constants.KEY_SERVER_STOP_TIME, -1L);
+        final long offlineTime;
+        if (serverStop == -1L) {
+            offlineTime = now - OFFLINE_TIMEOUT;
+        } else {
+            offlineTime = now - serverStop;
         }
         
         // TradeRoom Initialization //
@@ -242,7 +245,7 @@ public final class TradePlugin extends JavaPlugin {
             
             final TradeRoom room;
             try {
-                room = new TradeRoom(this.server, config);
+                room = new TradeRoom(this.server, offlineTime, config);
             } catch (final IllegalArgumentException e) {
                 this.logger.log(Level.WARNING, "Unable to deserialize trade room from file at " + tradeRoomFile.getPath());
                 this.logger.log(Level.WARNING, "Skipping trade room.");
@@ -401,7 +404,7 @@ public final class TradePlugin extends JavaPlugin {
             
             final Offline offline;
             try {
-                offline = new Offline(config);
+                offline = new Offline(offlineTime, config);
             } catch (final IllegalArgumentException e) {
                 this.logger.log(Level.WARNING, "Unable to deserialize offline trader from file at " + offlineFile.getPath());
                 this.logger.log(Level.WARNING, "Skipping offline trader.");
@@ -476,11 +479,19 @@ public final class TradePlugin extends JavaPlugin {
                 final Trader trader1 = room.getTrader1();
                 final Trader trader2 = room.getTrader2();
                 
-                if (trader1 != null && trader1.isOffline()) {
-                    this.processOfflineTrader(room, trader1, Side.SIDE_1);
+                if (trader1 != null) {
+                    if (trader1.isOffline()) {
+                        this.processOfflineTrader(room, trader1, Side.SIDE_1);
+                    } else {
+                        this.processOnlineTrader(room, trader1, Side.SIDE_1);
+                    }
                 }
-                if (trader2 != null && trader2.isOffline()) {
-                    this.processOfflineTrader(room, trader2, Side.SIDE_2);
+                if (trader2 != null) {
+                    if (trader2.isOffline()) {
+                        this.processOfflineTrader(room, trader2, Side.SIDE_2);
+                    } else {
+                        this.processOnlineTrader(room, trader2, Side.SIDE_2);
+                    }
                 }
             }
         }, 200L, 200L);
@@ -496,17 +507,36 @@ public final class TradePlugin extends JavaPlugin {
         command.setTabCompleter(tabExecutor);
     }
     
+    private void processOnlineTrader(@NotNull final TradeRoom room, @NotNull final Trader trader, @NotNull final Side side) {
+        
+        final Player player = this.server.getPlayer(trader.getUniqueId());
+        if (player == null || !player.isOnline()) {
+            
+            if (!trader.isOffline()) {
+                trader.setOffline(true);
+                this.saveRoom(this.console, room);
+            }
+            
+            this.processOfflineTrader(room, trader, side);
+            return;
+        }
+        
+        final ProtectedRegion region = side == Side.SIDE_1 ? room.getRegion1() : room.getRegion2();
+        if (region.contains(BukkitAdapter.asBlockVector(player.getLocation()))) {
+            return;
+        }
+        
+        final Location teleport = side == Side.SIDE_1 ? room.getTeleportIn1() : room.getTeleportIn2();
+        player.teleport(teleport);
+        player.sendMessage("§6Not sure how you got out, but please finish or cancel your trade before you leave.");
+    }
+    
     private void processOfflineTrader(@NotNull final TradeRoom room, @NotNull final Trader trader, @NotNull final Side side) {
             
         final long now = System.currentTimeMillis();
         final long expire = trader.getLogoutTime() + OFFLINE_TIMEOUT;
         
-        if (now - OFFLINE_TIMEOUT < this.serverStart) {
-            final long offlineTime = this.serverStart - this.serverStop;
-            if (expire + offlineTime >= now) {
-                return;
-            }
-        } else if (expire >= now) {
+        if (expire >= now) {
             return;
         }
         
@@ -622,15 +652,15 @@ public final class TradePlugin extends JavaPlugin {
             ignore.add(other.getUniqueId());
         }
         
-        this.serverStop = System.currentTimeMillis();
+        final long now = System.currentTimeMillis();
         final YamlConfiguration stopConfig = new YamlConfiguration();
-        stopConfig.set(Constants.KEY_SERVER_STOP_TIME, this.serverStop);
+        stopConfig.set(Constants.KEY_SERVER_STOP_TIME, now);
         try {
             stopConfig.save(this.serverStopFile);
         } catch (IOException | IllegalArgumentException e) {
             this.logger.log(Level.WARNING, "ISSUE WHILE SAVING SERVER STOP TIME.");
             this.logger.log(Level.WARNING, "Details below:");
-            this.logger.log(Level.WARNING, "server_stop_time:" + this.serverStop);
+            this.logger.log(Level.WARNING, "server_stop_time:" + now);
             this.logger.log(Level.WARNING, "ISSUE:");
             this.logger.log(Level.WARNING, "Attempted to save the Server Stop file.");
             this.logger.log(Level.WARNING, e.getClass().getSimpleName() + " thrown.", e);
@@ -2435,13 +2465,7 @@ public final class TradePlugin extends JavaPlugin {
     private String formatTime(final long logoutTime) {
         
         final long now = System.currentTimeMillis();
-        final long expire;
-        if (now - OFFLINE_TIMEOUT < this.serverStart) {
-            final long offlineTime = this.serverStart - this.serverStop;
-            expire = logoutTime + OFFLINE_TIMEOUT + offlineTime;
-        } else {
-            expire = logoutTime + OFFLINE_TIMEOUT;
-        }
+        final long expire = logoutTime + OFFLINE_TIMEOUT;
         
         final StringBuilder builder = new StringBuilder();
         if (now >= expire) {
