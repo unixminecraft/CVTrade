@@ -3,8 +3,8 @@
  * 
  * CVTrade Bukkit plugin for Minecraft Bukkit servers.
  * 
- * Copyright (C) 2021-2023 Matt Ciolkosz (https://github.com/mciolkosz/)
- * Copyright (C) 2021-2023 Cubeville (https://www.cubeville.org/)
+ * Copyright (C) 2021-2024 Matt Ciolkosz (https://github.com/mciolkosz/)
+ * Copyright (C) 2021-2024 Cubeville (https://www.cubeville.org/)
  * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -187,8 +187,8 @@ public final class TradePlugin extends JavaPlugin {
         this.logger.log(Level.INFO, "////////////////////////////////////////////////////////////////////////////////");
         this.logger.log(Level.INFO, "// CVTrade Bukkit plugin for Minecraft Bukkit servers.                        //");
         this.logger.log(Level.INFO, "//                                                                            //");
-        this.logger.log(Level.INFO, "// Copyright (C) 2021-2023 Matt Ciolkosz (https://github.com/mciolkosz/)      //");
-        this.logger.log(Level.INFO, "// Copyright (C) 2021-2023 Cubeville (https://www.cubeville.org/)             //");
+        this.logger.log(Level.INFO, "// Copyright (C) 2021-2024 Matt Ciolkosz (https://github.com/mciolkosz/)      //");
+        this.logger.log(Level.INFO, "// Copyright (C) 2021-2024 Cubeville (https://www.cubeville.org/)             //");
         this.logger.log(Level.INFO, "//                                                                            //");
         this.logger.log(Level.INFO, "// This program is free software: you can redistribute it and/or modify       //");
         this.logger.log(Level.INFO, "// it under the terms of the GNU General Public License as published by       //");

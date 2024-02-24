@@ -3,8 +3,8 @@
  *
  * CVTrade Bukkit plugin for Minecraft Bukkit servers.
  *
- * Copyright (C) 2021-2023 Matt Ciolkosz (https://github.com/mciolkosz/)
- * Copyright (C) 2021-2023 Cubeville (https://www.cubeville.org/)
+ * Copyright (C) 2021-2024 Matt Ciolkosz (https://github.com/mciolkosz/)
+ * Copyright (C) 2021-2024 Cubeville (https://www.cubeville.org/)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
